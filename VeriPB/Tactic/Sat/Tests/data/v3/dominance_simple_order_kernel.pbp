@@ -1,0 +1,42 @@
+pseudo-Boolean proof version 3.0
+f 10;
+def_order simple
+	vars
+		left u1;
+		right v1;
+		aux;
+	end;
+	def
+		1 ~u1 1 v1 >= 1;
+	end;
+	transitivity
+	vars
+		fresh_right w1;
+	end;
+	proof
+	proofgoal #1
+pol 2 1 + 3 +;
+	qed : 4;
+qed;
+	end;
+	reflexivity
+		proof
+			proofgoal #1
+			qed : 5;
+		qed;
+	end;
+end;
+load_order simple x1;
+pol 1 2 +;
+red 1 x1 1 a3 >= 1 : a3 -> 1 : subproof
+qed;
+dom 1 ~x1 1 x2 >= 1 : x1 -> x2 x2 -> x1 : subproof
+	proofgoal #2
+		rup >= 1 : 14 15;
+	qed : 16;
+qed;
+load_order ;
+pol 1 2 +;
+output NONE ;
+conclusion NONE;
+end pseudo-Boolean proof;

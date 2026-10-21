@@ -519,15 +519,19 @@ elab "langford_reflect " nm:ident ppSpace nTerm:num
     let proofStr ← IO.FS.readFile (System.FilePath.mk proofPath)
     let constrsExpr := mkApp (mkConst ``encode) nExpr
     let proofStrExpr := mkStrLit proofStr
-    let checkExpr := mkApp3 (mkConst ``VeriPB.Reflect.checkProofBool)
-      constrsExpr numVarsExpr proofStrExpr
+    let checkExpr := mkApp5 (mkConst ``VeriPB.Reflect.checkProofBool)
+      constrsExpr numVarsExpr
+      VeriPB.Reflect.emptyObjectiveExpr VeriPB.Reflect.emptyNamesExpr
+      proofStrExpr
     let hEqTrue ← match ← Lean.Meta.nativeEqTrue `langford_reflect checkExpr
         (axiomDeclRange? := (← getRef)) with
       | .success prf => pure prf
       | .notTrue => throwError "Reflection checker returned false for {name}"
-    let unsatProof := mkApp4
+    let unsatProof := mkApp6
       (mkConst ``VeriPB.Reflect.checkProof_sound)
-      constrsExpr numVarsExpr proofStrExpr hEqTrue
+      constrsExpr numVarsExpr
+      VeriPB.Reflect.emptyObjectiveExpr VeriPB.Reflect.emptyNamesExpr
+      proofStrExpr hEqTrue
     -- Build hn : 0 < n proof
     if n == 0 then throwError "n must be positive"
     let ltType := mkApp4 (mkConst ``LT.lt [.zero])

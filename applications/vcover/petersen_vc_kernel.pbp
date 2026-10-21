@@ -1,0 +1,35 @@
+pseudo-Boolean proof version 3.0
+f 15;
+rup >= 0 : ~ ;
+soli ~x1 x2 ~x3 x4 x5 x6 ~x7 x8 x9 x10;
+pol 2 17 +;
+pol 6 18 +;
+soli x1 x2 ~x3 x4 ~x5 ~x6 ~x7 x8 x9 x10;
+pol 10 20 + 12 +;
+pol 20 3 + 2 + 14 + 13 + 21 + 7 2 * + 2 d;
+pol 21 5 + 4 + 1 + 22 2 * + s x8 + s;
+rup 1 x3 >= 1 : ~ 23 6;
+rup 1 x5 >= 1 : ~ 23 8;
+rup 1 x9 >= 1 : ~ 23 9;
+rup 1 x3 1 x4 1 x5 1 x9 >= 3 : 25 26 24 ~;
+pol 11 20 + 27 + 14 +;
+rup 1 ~x1 >= 1 : ~ 28;
+rup 1 ~x2 >= 1 : ~ 28;
+rup 1 ~x1 1 ~x2 >= 2 : 29 30 ~;
+pol 1 31 +;
+pol 20 16 +;
+rup 1 x1 1 x2 1 x3 1 x4 1 x5 1 x6 1 x7 1 x8 1 x9 1 x10 >= 0 : ~ ;
+pol 34 16 +;
+delc 17 :  : subproof
+	proofgoal #1
+		rup  >= 0 :  ~ ;
+		pol 20 38 1 * +;
+		ia 1 ~x1 1 ~x2 1 ~x3 1 ~x4 1 ~x5 1 ~x6 1 ~x7 1 ~x8 1 ~x9 1 ~x10 >= 4 : 39 ;
+		pol 37 38 1 * + 40 + ;
+	qed : 41;
+qed;
+deld 27 31 34;
+rup 1 x1 1 x2 1 x3 1 x4 1 x5 1 x6 1 x7 1 x8 1 x9 1 x10 >= 6 : 29 30 1;
+output NONE ;
+conclusion BOUNDS 6 : 32 6 : x1 x2 ~x3 x4 ~x5 ~x6 ~x7 x8 x9 x10;
+end pseudo-Boolean proof;

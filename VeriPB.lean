@@ -14,6 +14,8 @@ import VeriPB.Tactic.Sat.VanDerWaerden
 import VeriPB.Tactic.Sat.Ramsey
 import VeriPB.Tactic.Sat.EquitableColoring
 import VeriPB.Tactic.Sat.BinPacking
+import VeriPB.Tactic.Sat.VertexCover
+import VeriPB.Tactic.Sat.Chromatic
 
 /-!
 # VeriPB: Verified Pseudo-Boolean Proof Checking

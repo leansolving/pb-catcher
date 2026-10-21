@@ -1,0 +1,9 @@
+pseudo-Boolean proof version 3.0
+f 4 ;
+pol 1 2 + ;
+pol 2 3 + ;
+core range 5 6 ;
+deld 5 ;
+output NONE ;
+conclusion NONE ;
+end pseudo-Boolean proof ;

@@ -402,16 +402,20 @@ elab "independent_set_reflect " n:ident ppSpace gExpr:term:max
     let numVarsExpr := mkApp (mkConst ``Graph.numVerts) gVal
     let proofStrExpr := mkStrLit proofStr
     -- checkProofBool (encode g target) numVerts proofStr
-    let checkExpr := mkApp3 (mkConst ``VeriPB.Reflect.checkProofBool)
-      constrsExpr numVarsExpr proofStrExpr
+    let checkExpr := mkApp5 (mkConst ``VeriPB.Reflect.checkProofBool)
+      constrsExpr numVarsExpr
+      VeriPB.Reflect.emptyObjectiveExpr VeriPB.Reflect.emptyNamesExpr
+      proofStrExpr
     let hEqTrue ← match ← Lean.Meta.nativeEqTrue `independent_set_reflect checkExpr
         (axiomDeclRange? := (← getRef)) with
       | .success prf => pure prf
       | .notTrue => throwError "Reflection checker returned false for {name}"
     -- checkProof_sound → formulaUnsat (encode g target)
-    let unsatProof := mkApp4
+    let unsatProof := mkApp6
       (mkConst ``VeriPB.Reflect.checkProof_sound)
-      constrsExpr numVarsExpr proofStrExpr hEqTrue
+      constrsExpr numVarsExpr
+      VeriPB.Reflect.emptyObjectiveExpr VeriPB.Reflect.emptyNamesExpr
+      proofStrExpr hEqTrue
     -- no_large_indset_of_unsat → ¬hasIndependentSet g target
     let finalProof := mkApp3 (mkConst ``no_large_indset_of_unsat)
       gVal targetVal unsatProof
@@ -424,6 +428,111 @@ elab "independent_set_reflect " n:ident ppSpace gExpr:term:max
       value := finalProof
     }
     Lean.logInfo m!"Registered {name} : ¬ hasIndependentSet (reflection)"
+
+/-! ### Optimization form: the independence number from one proof
+
+`min: -1 x_0 ... -1 x_{n-1}` over the edge constraints. In normalized
+minimization form the objective is `Σ ¬x_i` with constant `−n`, so the OPB
+value of a valuation is `−|{i | f i}|`. A VeriPB `conclusion BOUNDS −k : id
+−k : solution` certifies both `α ≤ k` (every independent set has `−size ≥
+−k`) and `α ≥ k` (the solution). -/
+
+/-- Edge constraints only (no cardinality constraint). -/
+def encodeOpt (g : Graph) : Array Constr := (mkEdgeConstrs g.edges).toArray
+
+/-- The normalized objective `Σ ¬x_i` of `min: -1 x_1 ... -1 x_n` (OPB names; internal variables `0..n-1`). -/
+def misObjective (g : Graph) : VeriPB.Reflect.Objective :=
+  (List.range g.numVerts).map fun i => (1, Literal.neg i)
+
+/-- Its constant: `−n`. -/
+def misOffset (g : Graph) : Int := -(g.numVerts : Int)
+
+theorem evalSum_negLits (f : Valuation) (n : Nat) :
+    evalSum f ((List.range n).map fun i => (1, Literal.neg i)) + countTrue f n
+      = n := by
+  induction n with
+  | zero => simp [evalSum, countTrue]
+  | succ n ih =>
+    simp only [List.range_succ, List.map_append, List.map]
+    rw [evalSum_append, countTrue_succ]
+    simp only [evalSum, evalLit]
+    cases f n <;> simp <;> omega
+
+/-- The OPB value of `f` is minus the number of selected vertices. -/
+theorem misObjective_opbVal (g : Graph) (f : Valuation) :
+    VeriPB.Reflect.opbVal (misObjective g) (misOffset g) f =
+      -(countTrue f g.numVerts : Int) := by
+  have h := evalSum_negLits f g.numVerts
+  simp only [VeriPB.Reflect.opbVal, VeriPB.Reflect.objVal, misObjective, misOffset]
+  omega
+
+theorem encodeOpt_sat_indset (g : Graph) (f : Valuation)
+    (h : VeriPB.Reflect.FormulaSat (encodeOpt g) f) : isIndependentSet g f :=
+  mkEdgeConstrs_sat_implies_independent g.edges f fun c hc => h c (by
+    simpa [encodeOpt] using hc)
+
+theorem indset_sat_encodeOpt (g : Graph) (f : Valuation)
+    (h : isIndependentSet g f) : VeriPB.Reflect.FormulaSat (encodeOpt g) f := by
+  intro c hc
+  have hc' : c ∈ mkEdgeConstrs g.edges := by simpa [encodeOpt] using hc
+  obtain ⟨u, v, he, hceq⟩ := mkEdgeConstrs_mem_edges g.edges c hc'
+  rw [hceq]
+  simp only [Constr.sat, evalSum, evalLit]
+  have := h (u, v) he
+  cases hu : f u <;> cases hv : f v <;> simp_all
+
+/-- Bridge: the bounds `−k ≤ −|S| ≤ −k` over the edge constraints give the
+independence number `k`. -/
+theorem independenceNumber_of_bounds (g : Graph) (k : Nat)
+    (h : VeriPB.Reflect.formulaBounds (encodeOpt g) (misObjective g) (misOffset g)
+      (some (-(k : Int))) (some (-(k : Int)))) :
+    independenceNumber g k := by
+  obtain ⟨hlb, hub⟩ := h
+  refine ⟨?_, ?_⟩
+  · obtain ⟨ρ, hρ, hval⟩ := hub
+    have hv : VeriPB.Reflect.opbVal (misObjective g) (misOffset g) ρ ≤ -(k : Int) :=
+      hval
+    rw [misObjective_opbVal] at hv
+    exact ⟨ρ, encodeOpt_sat_indset g ρ hρ, by omega⟩
+  · intro ⟨f, hindep, hcount⟩
+    have hv := hlb f (indset_sat_encodeOpt g f hindep)
+    have hv' : -(k : Int) ≤ VeriPB.Reflect.opbVal (misObjective g) (misOffset g) f :=
+      hv
+    rw [misObjective_opbVal] at hv'
+    omega
+
+/-- `independent_set_opt_reflect name g k "proof.pbp"`: the independence
+number `k` of `g` from one VeriPB optimization proof of
+`min: -1 x_1 ... -1 x_n` over the edge constraints (`conclusion BOUNDS
+−k : id −k : solution`), by native evaluation of `checkProofClaimBool`. This records a per-use axiom `checkProofClaimBool ... = true` (`_native.independent_set_opt_reflect.ax_*`, the same mechanism as `native_decide`; see `mkFormulaUnsatProof`). -/
+elab "independent_set_opt_reflect " n:ident ppSpace gExpr:term:max
+    ppSpace kTerm:num ppSpace proofFile:str : command => do
+  let name := (← getCurrNamespace) ++ n.getId
+  let proofPath := proofFile.getString
+  liftTermElabM do
+    let gVal ← Lean.Elab.Term.elabTerm gExpr (some (mkConst ``Graph))
+    let gVal ← instantiateMVars gVal
+    let k := kTerm.getNat
+    let kVal := mkRawNatLit k
+    let proofStr ← IO.FS.readFile (System.FilePath.mk proofPath)
+    let constrsExpr := mkApp (mkConst ``encodeOpt) gVal
+    let numVarsExpr := mkApp (mkConst ``Graph.numVerts) gVal
+    let objExpr := mkApp (mkConst ``misObjective) gVal
+    let offsetExpr := mkApp (mkConst ``misOffset) gVal
+    let claim := VeriPB.Reflect.Claim.bounds (some (-(k : Int))) (some (-(k : Int)))
+    let boundsProof ← VeriPB.Reflect.mkClaimProof `independent_set_opt_reflect
+      constrsExpr numVarsExpr objExpr offsetExpr proofStr claim
+      (ref? := some (← getRef))
+    let finalProof := mkApp3 (mkConst ``independenceNumber_of_bounds) gVal kVal
+      boundsProof
+    let finalType := mkApp2 (mkConst ``independenceNumber) gVal kVal
+    addDecl <| Declaration.thmDecl {
+      name
+      levelParams := []
+      type := finalType
+      value := finalProof
+    }
+    Lean.logInfo m!"Registered {name} : independenceNumber G {k} (reflection)"
 
 end IndependentSet
 
@@ -550,3 +659,133 @@ theorem paley_alpha_not_monotone :
 end PaleyOptions
 
 end PaleyShowcase
+
+-- ============================================================
+-- Paley graph independence numbers from single optimization proofs
+-- (RoundingSat `--opt-mode=linear --lp=0`, elaborated by VeriPB; each
+-- `conclusion BOUNDS -k : id -k : solution` gives both directions).
+-- ============================================================
+
+namespace PaleyOptShowcase
+
+section PaleyOptOptions
+set_option maxRecDepth 200000
+set_option maxHeartbeats 800000
+
+open IndependentSet
+
+independent_set_opt_reflect paley13_alpha (paley 13) 3
+  "applications/paley_mis/Paley_13_mis_kernel.pbp"
+independent_set_opt_reflect paley17_alpha (paley 17) 3
+  "applications/paley_mis/Paley_17_mis_kernel.pbp"
+independent_set_opt_reflect paley29_alpha (paley 29) 4
+  "applications/paley_mis/Paley_29_mis_kernel.pbp"
+independent_set_opt_reflect paley37_alpha (paley 37) 4
+  "applications/paley_mis/Paley_37_mis_kernel.pbp"
+independent_set_opt_reflect paley41_alpha (paley 41) 5
+  "applications/paley_mis/Paley_41_mis_kernel.pbp"
+independent_set_opt_reflect paley53_alpha (paley 53) 5
+  "applications/paley_mis/Paley_53_mis_kernel.pbp"
+independent_set_opt_reflect paley61_alpha (paley 61) 5
+  "applications/paley_mis/Paley_61_mis_kernel.pbp"
+independent_set_opt_reflect paley73_alpha (paley 73) 5
+  "applications/paley_mis/Paley_73_mis_kernel.pbp"
+independent_set_opt_reflect paley89_alpha (paley 89) 5
+  "applications/paley_mis/Paley_89_mis_kernel.pbp"
+independent_set_opt_reflect paley97_alpha (paley 97) 6
+  "applications/paley_mis/Paley_97_mis_kernel.pbp"
+independent_set_opt_reflect paley101_alpha (paley 101) 5
+  "applications/paley_mis/Paley_101_mis_kernel.pbp"
+
+-- The two routes agree.
+example : independenceNumber (paley 101) 5 := PaleyShowcase.paley101_alpha
+example : independenceNumber (paley 101) 5 := paley101_alpha
+
+end PaleyOptOptions
+
+end PaleyOptShowcase
+
+/-! ## Shared counting lemmas for the optimization bridges -/
+
+namespace OptCount
+
+open Sat.PB IndependentSet
+
+theorem countTrue_le (p : Nat → Bool) (n : Nat) : countTrue p n ≤ n := by
+  induction n with
+  | zero => simp [countTrue]
+  | succ n ih => rw [countTrue_succ]; split <;> omega
+
+theorem countTrue_mono (p : Nat → Bool) {m n : Nat} (h : m ≤ n) :
+    countTrue p m ≤ countTrue p n := by
+  induction n with
+  | zero => have : m = 0 := by omega
+            subst this; exact Nat.le_refl _
+  | succ n ih =>
+    rcases Nat.lt_or_ge m (n + 1) with hlt | hge
+    · have := ih (by omega); rw [countTrue_succ]; omega
+    · have : m = n + 1 := by omega
+      subst this; exact Nat.le_refl _
+
+/-- A position where `p` holds raises the count strictly. -/
+theorem countTrue_lt_of_true (p : Nat → Bool) {a b : Nat} (ha : p a = true)
+    (hab : a < b) : countTrue p a < countTrue p b := by
+  have h1 : countTrue p (a + 1) = countTrue p a + 1 := by
+    rw [countTrue_succ, ha]; simp
+  have h2 := countTrue_mono p (show a + 1 ≤ b by omega)
+  omega
+
+/-- The rank `countTrue p a` is injective on the positions where `p` holds. -/
+theorem countTrue_inj (p : Nat → Bool) {a b : Nat} (ha : p a = true)
+    (hb : p b = true) (h : countTrue p a = countTrue p b) : a = b := by
+  rcases Nat.lt_trichotomy a b with hlt | heq | hgt
+  · have := countTrue_lt_of_true p ha hlt; omega
+  · exact heq
+  · have := countTrue_lt_of_true p hb hgt; omega
+
+theorem countTrue_pos_exists (p : Nat → Bool) (n : Nat) (h : 0 < countTrue p n) :
+    ∃ i, i < n ∧ p i = true := by
+  induction n with
+  | zero => simp [countTrue] at h
+  | succ n ih =>
+    rw [countTrue_succ] at h
+    cases hp : p n
+    · rw [hp] at h
+      obtain ⟨i, hi, hpi⟩ := ih (by simpa using h)
+      exact ⟨i, by omega, hpi⟩
+    · exact ⟨n, by omega, hp⟩
+
+/-- The indicator of `[0, a)` counts `min a n` positions of `[0, n)`. -/
+theorem countTrue_lt_const (a n : Nat) :
+    countTrue (fun j => decide (j < a)) n = min a n := by
+  induction n with
+  | zero => simp [countTrue]
+  | succ n ih =>
+    rw [countTrue_succ, ih]
+    rcases Nat.lt_or_ge n a with h | h
+    · rw [if_pos (by simpa using h)]; omega
+    · rw [if_neg (by simpa using h)]; omega
+
+/-- The objective `Σ_{i<n} x_{b+i}` counts the true variables in the block. -/
+theorem evalSum_posLits_shift (f : Valuation) (b n : Nat) :
+    evalSum f ((List.range n).map fun i => (1, Literal.pos (b + i))) =
+      countTrue (fun i => f (b + i)) n := by
+  induction n with
+  | zero => simp [evalSum, countTrue]
+  | succ n ih =>
+    simp only [List.range_succ, List.map_append, List.map]
+    rw [evalSum_append, ih, countTrue_succ]
+    simp only [evalSum, evalLit]
+    cases f (b + n) <;> simp
+
+/-- Every edge joins two of the vertices `0..n-1`. -/
+def edgesInRange (g : Graph) : Bool :=
+  g.edges.all fun e => decide (e.1 < g.numVerts) && decide (e.2 < g.numVerts)
+
+theorem edgesInRange_spec (g : Graph) (h : edgesInRange g = true) :
+    ∀ e ∈ g.edges, e.1 < g.numVerts ∧ e.2 < g.numVerts := by
+  intro e he
+  simp only [edgesInRange, List.all_eq_true, Bool.and_eq_true, decide_eq_true_eq] at h
+  exact h e he
+
+end OptCount

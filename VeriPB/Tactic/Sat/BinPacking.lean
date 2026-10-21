@@ -8,6 +8,7 @@ import Std
 import VeriPB.Tactic.Sat.PseudoBoolean
 import VeriPB.Tactic.Sat.FromVeriPB
 import VeriPB.Tactic.Sat.Reflect
+import VeriPB.Tactic.Sat.IndependentSet
 
 /-!
 # Trusted Bin Packing Encoding
@@ -25,12 +26,16 @@ such that the total size in each bin is at most C.
 
 * `BinPacking.bp12_5_impossible` -- 12 items of sizes [10,9,8,8,6,5,4,4,4,4,4,4]
   do not fit into 5 bins of capacity 14
+* `BinPacking.bp12_m6_minBins`, `bp12_m7_minBins` -- 6 bins are the minimum
+  (one optimization proof each, with 6 or 7 bins available)
 
 ## Infrastructure
 
 * `BinPacking.encode` -- PB constraint encoding
 * `BinPacking.no_packing_of_unsat` -- encoding soundness
 * `binpack_reflect` -- elaboration command
+* `BinPacking.encodeOpt`, `minBins`, `minBins_of_bounds`, `binpack_opt_reflect`
+  -- optimization form (minimum number of bins)
 -/
 
 namespace BinPacking
@@ -368,15 +373,19 @@ elab "binpack_reflect " nm:ident ppSpace instTerm:term:max ppSpace proofFile:str
     let proofStr ← IO.FS.readFile (System.FilePath.mk proofPath)
     let constrsExpr := mkApp (mkConst ``encode) instExpr
     let proofStrExpr := mkStrLit proofStr
-    let checkExpr := mkApp3 (mkConst ``VeriPB.Reflect.checkProofBool)
-      constrsExpr numVarsExpr proofStrExpr
+    let checkExpr := mkApp5 (mkConst ``VeriPB.Reflect.checkProofBool)
+      constrsExpr numVarsExpr
+      VeriPB.Reflect.emptyObjectiveExpr VeriPB.Reflect.emptyNamesExpr
+      proofStrExpr
     let hEqTrue ← match ← Lean.Meta.nativeEqTrue `binpack_reflect checkExpr
         (axiomDeclRange? := (← getRef)) with
       | .success prf => pure prf
       | .notTrue => throwError "Reflection checker returned false for {name}"
-    let unsatProof := mkApp4
+    let unsatProof := mkApp6
       (mkConst ``VeriPB.Reflect.checkProof_sound)
-      constrsExpr numVarsExpr proofStrExpr hEqTrue
+      constrsExpr numVarsExpr
+      VeriPB.Reflect.emptyObjectiveExpr VeriPB.Reflect.emptyNamesExpr
+      proofStrExpr hEqTrue
     -- Build side-condition proofs via mkDecideProof
     if numBins == 0 then throwError "numBins must be positive"
     let hmType := mkApp4 (mkConst ``LT.lt [.zero])
@@ -416,5 +425,384 @@ def inst12_5 : Instance :=
 -- Impossibility verified via VeriPB reflection checker
 binpack_reflect bp12_5_impossible inst12_5
   "applications/binpack/bp12_5_kernel.pbp"
+
+/-! ### Optimization form: the minimum number of bins from one proof
+
+With `m = inst.numBins` bins available, `y_j` (index `n*m + j`) says that bin
+`j` is used. The constraints, in OPB file order, are the item constraints
+`Σ_j x_{i,j} ≥ 1` and, per bin, `Σ_i s_i ¬x_{i,j} + C y_j ≥ totalSize`
+(that is, `Σ_i s_i x_{i,j} ≤ C y_j`); the objective is `min: Σ_j y_j`. A
+`conclusion BOUNDS k : id k : solution` speaks only about packings into at
+most `m` bins, but the solution gives `k ≤ m`, so the bridge theorem
+concludes that `k` bins are the minimum. It assumes positive item sizes
+(an item of size 0 could sit in an unused bin). -/
+
+/-- The instance with `k` bins. -/
+def Instance.withBins (inst : Instance) (k : Nat) : Instance := { inst with numBins := k }
+
+/-- `k` is the least number of bins of capacity `inst.capacity` that hold
+the items (`inst.numBins` is ignored). -/
+def minBins (inst : Instance) (k : Nat) : Prop :=
+  hasPacking (inst.withBins k) ∧ ∀ k', hasPacking (inst.withBins k') → k ≤ k'
+
+/-- All item sizes are positive. -/
+def sizesPositive (inst : Instance) : Bool := inst.sizes.all fun s => decide (0 < s)
+
+theorem sizesPositive_spec (inst : Instance) (h : sizesPositive inst = true) :
+    ∀ i, i < inst.numItems → 0 < inst.sizes[i]! := by
+  intro i hi
+  simp only [sizesPositive, List.all_eq_true, decide_eq_true_eq] at h
+  have hi' : i < inst.sizes.length := hi
+  rw [show inst.sizes[i]! = inst.sizes[i] from by
+    simp [getElem!_def, List.getElem?_eq_getElem hi']]
+  exact h _ (List.getElem_mem hi')
+
+/-- Bin `j` holds at most `C`, and nothing unless it is used:
+`Σ_i s_i ¬x_{i,j} + C y_j ≥ totalSize`. -/
+def mkCapOptConstr (inst : Instance) (j : Nat) : Constr :=
+  ⟨(List.range inst.numItems).map (fun i =>
+      (inst.sizes[i]!, Literal.neg (varIdx inst.numBins i j))) ++
+    [(inst.capacity, Literal.pos (inst.numItems * inst.numBins + j))],
+   inst.totalSize⟩
+
+/-- The constraints of the optimization encoding, in OPB file order. -/
+def encodeOpt (inst : Instance) : Array Constr :=
+  ((List.range inst.numItems).map (mkAssignConstr inst.numBins) ++
+    (List.range inst.numBins).map (mkCapOptConstr inst)).toArray
+
+/-- The objective `Σ_j y_j` (offset 0). -/
+def binObjective (inst : Instance) : VeriPB.Reflect.Objective :=
+  (List.range inst.numBins).map fun j => (1, Literal.pos (inst.numItems * inst.numBins + j))
+
+/-- Number of variables: `n*m` assignment and `m` usage variables. -/
+def Instance.numVarsOpt (inst : Instance) : Nat :=
+  inst.numItems * inst.numBins + inst.numBins
+
+-- sumIf lemmas
+
+theorem sumIf_congr (sizes : List Nat) (p q : Nat → Bool) :
+    ∀ n, (∀ i, i < n → p i = q i) → sumIf sizes p n = sumIf sizes q n := by
+  intro n; induction n with
+  | zero => intro _; rfl
+  | succ n ih =>
+    intro h
+    simp only [sumIf]
+    rw [h n (by omega), ih (fun i hi => h i (by omega))]
+
+theorem sumIf_false (sizes : List Nat) : ∀ n, sumIf sizes (fun _ => false) n = 0 := by
+  intro n; induction n with
+  | zero => rfl
+  | succ n ih => simp [sumIf, ih]
+
+theorem sumIf_mono (sizes : List Nat) (p q : Nat → Bool) :
+    ∀ n, (∀ i, i < n → p i = true → q i = true) → sumIf sizes p n ≤ sumIf sizes q n := by
+  intro n; induction n with
+  | zero => intro _; simp [sumIf]
+  | succ n ih =>
+    intro h
+    have := ih (fun i hi => h i (by omega))
+    have := h n (by omega)
+    simp only [sumIf]
+    cases hp : p n <;> cases hq : q n <;> simp_all <;> omega
+
+theorem le_sumIf (sizes : List Nat) (p : Nat → Bool) :
+    ∀ n i, i < n → p i = true → sizes[i]! ≤ sumIf sizes p n := by
+  intro n; induction n with
+  | zero => intro i hi; omega
+  | succ n ih =>
+    intro i hi hp
+    simp only [sumIf]
+    rcases Nat.lt_or_ge i n with hlt | hge
+    · have := ih i hlt hp; omega
+    · have : i = n := by omega
+      subst this; simp [hp]
+
+theorem evalSum_neg_sumIf (f : Valuation) (sizes : List Nat) (m j : Nat) :
+    ∀ k, evalSum f ((List.range k).map fun i => (sizes[i]!, Literal.neg (varIdx m i j))) =
+      sumIf sizes (fun i => !f (varIdx m i j)) k := by
+  intro k; induction k with
+  | zero => simp [evalSum, sumIf]
+  | succ n ih =>
+    simp only [List.range_succ, List.map_append, List.map_cons, List.map_nil,
+      evalSum_append]
+    rw [ih]
+    simp only [evalSum, evalLit, sumIf]
+    rcases Bool.eq_false_or_eq_true (f (varIdx m n j)) with h | h <;> simp [h] <;> omega
+
+theorem varIdx_lt {n m i j : Nat} (hi : i < n) (hj : j < m) : varIdx m i j < n * m := by
+  have h := Nat.mul_le_mul_right m (show i + 1 ≤ n by omega)
+  rw [Nat.succ_mul] at h
+  simp only [varIdx]
+  omega
+
+-- Membership in the encoding
+
+theorem mem_encodeOpt (inst : Instance) (c : Constr) :
+    c ∈ (encodeOpt inst).toList ↔
+      c ∈ (List.range inst.numItems).map (mkAssignConstr inst.numBins) ∨
+        c ∈ (List.range inst.numBins).map (mkCapOptConstr inst) := by
+  simp [encodeOpt]
+
+/-- The load of bin `j` under any solution is at most `C y_j`. -/
+theorem capOptConstr_load (inst : Instance) (f : Valuation) (j : Nat)
+    (h : (mkCapOptConstr inst j).sat f) :
+    sumIf inst.sizes (fun i => f (varIdx inst.numBins i j)) inst.numItems ≤
+      inst.capacity * evalLit f (Literal.pos (inst.numItems * inst.numBins + j)) := by
+  simp only [mkCapOptConstr, Constr.sat, evalSum_append, evalSum_neg_sumIf] at h
+  have hcomp : sumIf inst.sizes (fun i => f (varIdx inst.numBins i j)) inst.numItems +
+      sumIf inst.sizes (fun i => !f (varIdx inst.numBins i j)) inst.numItems =
+      sumAll inst.sizes inst.numItems :=
+    sumIf_complement inst.sizes (fun i => f (varIdx inst.numBins i j)) inst.numItems
+  rw [← totalSize_eq_sumAll_full] at hcomp
+  simp only [evalSum] at h
+  omega
+
+-- Objective value
+
+/-- The OPB value is the number of used bins. -/
+theorem binObjective_opbVal (inst : Instance) (f : Valuation) :
+    VeriPB.Reflect.opbVal (binObjective inst) 0 f =
+      (IndependentSet.countTrue (fun j => f (inst.numItems * inst.numBins + j))
+        inst.numBins : Int) := by
+  simp only [VeriPB.Reflect.opbVal, VeriPB.Reflect.objVal, binObjective,
+    OptCount.evalSum_posLits_shift]
+  omega
+
+-- From a solution to a packing
+
+/-- A solution with `u` used bins yields a packing into `u` bins (each used
+bin is renamed to its rank). -/
+theorem packing_of_sat (inst : Instance) (hpos : ∀ i, i < inst.numItems → 0 < inst.sizes[i]!)
+    (ρ : Valuation) (hρ : VeriPB.Reflect.FormulaSat (encodeOpt inst) ρ) :
+    hasPacking (inst.withBins
+      (IndependentSet.countTrue (fun j => ρ (inst.numItems * inst.numBins + j))
+        inst.numBins)) := by
+  let y : Nat → Bool := fun j => ρ (inst.numItems * inst.numBins + j)
+  have hcap : ∀ j, j < inst.numBins →
+      sumIf inst.sizes (fun i => ρ (varIdx inst.numBins i j)) inst.numItems ≤
+        inst.capacity * evalLit ρ (Literal.pos (inst.numItems * inst.numBins + j)) :=
+    fun j hj => capOptConstr_load inst ρ j (hρ _ ((mem_encodeOpt inst _).2
+      (Or.inr (List.mem_map.2 ⟨j, List.mem_range.2 hj, rfl⟩))))
+  have hpick : ∀ i, ∃ j, i < inst.numItems →
+      j < inst.numBins ∧ ρ (varIdx inst.numBins i j) = true := by
+    intro i
+    by_cases hi : i < inst.numItems
+    · have ha := hρ _ ((mem_encodeOpt inst _).2
+        (Or.inl (List.mem_map.2 ⟨i, List.mem_range.2 hi, rfl⟩)))
+      simp only [mkAssignConstr, varIdx, Constr.sat, OptCount.evalSum_posLits_shift] at ha
+      obtain ⟨j, hj, hx⟩ := OptCount.countTrue_pos_exists
+        (fun j => ρ (i * inst.numBins + j)) inst.numBins (by omega)
+      exact ⟨j, fun _ => ⟨hj, hx⟩⟩
+    · exact ⟨0, fun h => absurd h hi⟩
+  let pick : Nat → Nat := fun i => Classical.choose (hpick i)
+  have hpick_spec : ∀ i, i < inst.numItems →
+      pick i < inst.numBins ∧ ρ (varIdx inst.numBins i (pick i)) = true :=
+    fun i => Classical.choose_spec (hpick i)
+  -- the chosen bin of an item is used, since the item has positive size
+  have hused : ∀ i, i < inst.numItems → y (pick i) = true := by
+    intro i hi
+    obtain ⟨hj, hx⟩ := hpick_spec i hi
+    have hc := hcap (pick i) hj
+    have hle := le_sumIf inst.sizes (fun i' => ρ (varIdx inst.numBins i' (pick i)))
+      inst.numItems i hi hx
+    have hp := hpos i hi
+    show ρ (inst.numItems * inst.numBins + pick i) = true
+    cases hy : ρ (inst.numItems * inst.numBins + pick i)
+    · simp only [evalLit, hy] at hc; simp at hc; omega
+    · rfl
+  refine ⟨fun i => IndependentSet.countTrue y (pick i), ?_, ?_⟩
+  · intro i hi
+    exact OptCount.countTrue_lt_of_true y (hused i hi) (hpick_spec i hi).1
+  · intro r _
+    show binLoad inst.sizes _ r inst.numItems ≤ inst.capacity
+    rw [binLoad_eq_sumIf]
+    by_cases hex : ∃ i0, i0 < inst.numItems ∧ IndependentSet.countTrue y (pick i0) = r
+    · obtain ⟨i0, hi0, hr⟩ := hex
+      have hsub : sumIf inst.sizes
+          (fun i => decide (IndependentSet.countTrue y (pick i) = r)) inst.numItems ≤
+          sumIf inst.sizes (fun i => ρ (varIdx inst.numBins i (pick i0))) inst.numItems := by
+        apply sumIf_mono
+        intro i hi hd
+        simp only [decide_eq_true_eq] at hd
+        have hsame : pick i = pick i0 :=
+          OptCount.countTrue_inj y (hused i hi) (hused i0 hi0) (by omega)
+        rw [← hsame]
+        exact (hpick_spec i hi).2
+      have hc := hcap (pick i0) (hpick_spec i0 hi0).1
+      have h1 := evalLit_le_one ρ (Literal.pos (inst.numItems * inst.numBins + pick i0))
+      have h2 := Nat.mul_le_mul_left inst.capacity h1
+      rw [Nat.mul_one] at h2
+      omega
+    · have hzero : sumIf inst.sizes
+          (fun i => decide (IndependentSet.countTrue y (pick i) = r)) inst.numItems =
+          sumIf inst.sizes (fun _ => false) inst.numItems :=
+        sumIf_congr _ _ _ _ fun i hi => by
+          simp only [decide_eq_false_iff_not]
+          exact fun h => hex ⟨i, hi, h⟩
+      rw [sumIf_false] at hzero
+      omega
+
+-- From a packing to a solution
+
+/-- The valuation of a packing `assign` into `k'` bins: `x_{i,j}` iff
+`assign i = j`, and `y_j` iff `j < k'`. -/
+def binVal (n m k' : Nat) (assign : Nat → Nat) : Valuation := fun v =>
+  if v < n * m then decide (assign (v / m) = v % m) else decide (v - n * m < k')
+
+theorem binVal_x {n m k' i j : Nat} (assign : Nat → Nat) (hi : i < n) (hj : j < m) :
+    binVal n m k' assign (varIdx m i j) = decide (assign i = j) := by
+  simp only [binVal, if_pos (varIdx_lt hi hj), varIdx_div (by omega) hj,
+    varIdx_mod (by omega) hj]
+
+theorem binVal_y {n m k' : Nat} (assign : Nat → Nat) (j : Nat) :
+    binVal n m k' assign (n * m + j) = decide (j < k') := by
+  simp only [binVal, show ¬ n * m + j < n * m by omega, ↓reduceIte,
+    show n * m + j - n * m = j by omega]
+
+theorem binVal_sat (inst : Instance) (k' : Nat) (assign : Nat → Nat)
+    (hpack : isValidPacking (inst.withBins k') assign) (hk : k' < inst.numBins) :
+    VeriPB.Reflect.FormulaSat (encodeOpt inst)
+      (binVal inst.numItems inst.numBins k' assign) := by
+  obtain ⟨hbin, hload⟩ := hpack
+  have hbin : ∀ i, i < inst.numItems → assign i < k' := hbin
+  have hload : ∀ j, j < k' → binLoad inst.sizes assign j inst.numItems ≤ inst.capacity :=
+    hload
+  intro c hc
+  rcases (mem_encodeOpt inst c).1 hc with hc | hc
+  · obtain ⟨i, hi, rfl⟩ := List.mem_map.1 hc
+    have hi := List.mem_range.1 hi
+    have hai : assign i < inst.numBins := by have := hbin i hi; omega
+    have hp := binVal_x (k' := k') assign hi hai
+    simp only [decide_true] at hp
+    simp only [mkAssignConstr, Constr.sat]
+    simp only [varIdx] at hp ⊢
+    rw [OptCount.evalSum_posLits_shift]
+    have := OptCount.countTrue_lt_of_true
+      (fun j => binVal inst.numItems inst.numBins k' assign (i * inst.numBins + j)) hp hai
+    omega
+  · obtain ⟨j, hj, rfl⟩ := List.mem_map.1 hc
+    have hj := List.mem_range.1 hj
+    simp only [mkCapOptConstr, Constr.sat, evalSum_append, evalSum_neg_sumIf, evalSum,
+      evalLit, binVal_y]
+    have hcong : sumIf inst.sizes
+        (fun i => !binVal inst.numItems inst.numBins k' assign (varIdx inst.numBins i j))
+        inst.numItems = sumIf inst.sizes (fun i => !decide (assign i = j)) inst.numItems :=
+      sumIf_congr _ _ _ _ fun i hi => by rw [binVal_x assign hi hj]
+    have hcomp := sumIf_complement inst.sizes (fun i => decide (assign i = j)) inst.numItems
+    have htot := totalSize_eq_sumAll_full inst
+    rw [hcong]
+    by_cases hjk : j < k'
+    · have hl := hload j hjk
+      rw [binLoad_eq_sumIf] at hl
+      simp only [hjk, decide_true, ↓reduceIte]
+      omega
+    · have hzero : sumIf inst.sizes (fun i => decide (assign i = j)) inst.numItems =
+          sumIf inst.sizes (fun _ => false) inst.numItems :=
+        sumIf_congr _ _ _ _ fun i hi => by
+          have := hbin i hi
+          simp only [decide_eq_false_iff_not]
+          omega
+      rw [sumIf_false] at hzero
+      simp only [hjk, decide_false, Bool.false_eq_true, ↓reduceIte]
+      omega
+
+/-- Bridge: the bounds `k ≤ Σ_j y_j ≤ k` with `m` bins available give the
+minimum number of bins `k` (positive sizes). The lower bound covers only
+packings into fewer than `m` bins; the solution of the upper bound shows
+`k ≤ m`, which covers the rest. -/
+theorem minBins_of_bounds (inst : Instance) (k : Nat) (hpos : sizesPositive inst = true)
+    (h : VeriPB.Reflect.formulaBounds (encodeOpt inst) (binObjective inst) 0
+      (some (k : Int)) (some (k : Int))) :
+    minBins inst k := by
+  have hpos := sizesPositive_spec inst hpos
+  obtain ⟨hlb, hub⟩ := h
+  obtain ⟨ρ, hρ, hval⟩ := hub
+  have hv : VeriPB.Reflect.opbVal (binObjective inst) 0 ρ ≤ (k : Int) := hval
+  rw [binObjective_opbVal] at hv
+  have hv2 : (k : Int) ≤ VeriPB.Reflect.opbVal (binObjective inst) 0 ρ := hlb ρ hρ
+  rw [binObjective_opbVal] at hv2
+  have hle := OptCount.countTrue_le
+    (fun j => ρ (inst.numItems * inst.numBins + j)) inst.numBins
+  refine ⟨?_, ?_⟩
+  · obtain ⟨assign, hbin, hload⟩ := packing_of_sat inst hpos ρ hρ
+    refine ⟨assign, fun i hi => ?_, fun j hj => hload j (by
+      simp only [Instance.withBins] at hj ⊢; omega)⟩
+    have : assign i < IndependentSet.countTrue
+        (fun j => ρ (inst.numItems * inst.numBins + j)) inst.numBins := hbin i hi
+    show assign i < k
+    omega
+  · intro k' ⟨assign, hpack⟩
+    rcases Nat.lt_or_ge k' inst.numBins with hk | hk
+    · have hs := binVal_sat inst k' assign hpack hk
+      have hl : (k : Int) ≤ VeriPB.Reflect.opbVal (binObjective inst) 0
+          (binVal inst.numItems inst.numBins k' assign) := hlb _ hs
+      rw [binObjective_opbVal] at hl
+      have hcount : IndependentSet.countTrue
+          (fun j => binVal inst.numItems inst.numBins k' assign
+            (inst.numItems * inst.numBins + j)) inst.numBins =
+          IndependentSet.countTrue (fun j => decide (j < k')) inst.numBins := by
+        simp only [binVal_y]
+      rw [hcount, OptCount.countTrue_lt_const] at hl
+      omega
+    · omega
+
+/-- `binpack_opt_reflect name inst k "proof.pbp"`: `k` is the minimum number
+of bins, from one VeriPB optimization proof of `min: Σ_j y_j` over the
+`inst.numBins`-bin encoding `encodeOpt` (`conclusion BOUNDS k : id k :
+solution`), by native evaluation of `checkProofClaimBool`;
+`sizesPositive inst` is checked by `decide`. This records a per-use axiom
+`checkProofClaimBool ... = true` (`_native.binpack_opt_reflect.ax_*`, the
+same mechanism as `native_decide`; see `mkFormulaUnsatProof`). -/
+elab "binpack_opt_reflect " nm:ident ppSpace instTerm:term:max ppSpace kTerm:num
+    ppSpace proofFile:str : command => do
+  let name := (← getCurrNamespace) ++ nm.getId
+  let proofPath := proofFile.getString
+  liftTermElabM do
+    let instExpr ← Lean.Elab.Term.elabTerm instTerm (some (mkConst ``Instance))
+    let instExpr ← instantiateMVars instExpr
+    let k := kTerm.getNat
+    let kVal := mkRawNatLit k
+    let proofStr ← IO.FS.readFile (System.FilePath.mk proofPath)
+    let constrsExpr := mkApp (mkConst ``encodeOpt) instExpr
+    let numVarsExpr := mkApp (mkConst ``Instance.numVarsOpt) instExpr
+    let objExpr := mkApp (mkConst ``binObjective) instExpr
+    let offsetExpr := toExpr (0 : Int)
+    let hposVal ← whnfD (mkApp (mkConst ``sizesPositive) instExpr)
+    unless hposVal.isConstOf ``Bool.true do
+      throwError "binpack_opt_reflect: every item size must be positive"
+    let claim := VeriPB.Reflect.Claim.bounds (some (k : Int)) (some (k : Int))
+    let boundsProof ← VeriPB.Reflect.mkClaimProof `binpack_opt_reflect
+      constrsExpr numVarsExpr objExpr offsetExpr proofStr claim
+      (ref? := some (← getRef))
+    let hposType := mkApp3 (mkConst ``Eq [.succ .zero]) (mkConst ``Bool)
+      (mkApp (mkConst ``sizesPositive) instExpr) (mkConst ``Bool.true)
+    let hposProof ← mkDecideProof hposType
+    let finalProof := mkApp4 (mkConst ``minBins_of_bounds) instExpr kVal hposProof
+      boundsProof
+    let finalType := mkApp2 (mkConst ``minBins) instExpr kVal
+    addDecl <| Declaration.thmDecl {
+      name
+      levelParams := []
+      type := finalType
+      value := finalProof
+    }
+    Lean.logInfo m!"Registered {name} : minBins inst {k} (reflection)"
+
+/-- The bp12 items with 6 bins available. -/
+def inst12_m6 : Instance := { inst12_5 with numBins := 6 }
+
+/-- The bp12 items with 7 bins available. -/
+def inst12_m7 : Instance := { inst12_5 with numBins := 7 }
+
+-- The 12 items need 6 bins of capacity 14 (proof with 6 bins available).
+binpack_opt_reflect bp12_m6_minBins inst12_m6 6
+  "applications/binpack/bp12_m6_opt_kernel.pbp"
+-- The same optimum from the proof with 7 bins available.
+binpack_opt_reflect bp12_m7_minBins inst12_m7 6
+  "applications/binpack/bp12_m7_opt_kernel.pbp"
+
+-- `minBins` ignores `numBins`: both proofs speak about the same items.
+example : minBins inst12_5 6 := bp12_m6_minBins
+example : minBins inst12_5 6 := bp12_m7_minBins
 
 end BinPacking

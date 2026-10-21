@@ -1,0 +1,6 @@
+pseudo-Boolean proof version 3.0
+f 0;
+soli ~cu_1 ~cu_2 ~cu_3 ~cu_4 vc_0_1 vc_1_2 vc_2_3 vc_3_2;
+output NONE ;
+conclusion NONE;
+end pseudo-Boolean proof;

@@ -1,0 +1,7 @@
+pseudo-Boolean proof version 3.0
+f 6 ;
+pol 1 3 m ;
+ia 2 x1 3 ~x2 1 ~x3 5 x4 >= 5 : 7 ;
+output NONE ;
+conclusion NONE ;
+end pseudo-Boolean proof ;

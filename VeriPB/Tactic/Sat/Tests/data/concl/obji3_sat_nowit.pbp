@@ -1,0 +1,7 @@
+pseudo-Boolean proof version 3.0
+f 3;
+pol 1 2 + 3 + 2 d;
+obji -2;
+output NONE ;
+conclusion SAT;
+end pseudo-Boolean proof;

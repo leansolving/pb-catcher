@@ -1,0 +1,43 @@
+pseudo-Boolean proof version 3.0
+f 3;
+pol 1 2 + 3 + 2 d;
+red 1 ~x1 1 ~x2 1 ~x3 1 x4 >= 3 : x4 -> 1 : subproof
+	proofgoal #1
+		pol 6 4 + ;
+	qed : 7;
+qed;
+red 1 x1 1 x2 1 x3 1 ~x4 >= 1 : x4 -> 0 : subproof
+qed;
+core id 8 10;
+obju new 1 ~x4 2 : subproof
+	proofgoal #1
+		pol 11 10 + ;
+	qed : 12;
+	proofgoal #2
+		pol 13 8 + ;
+	qed : 14;
+qed;
+pol 4 10 + s;
+delc 3 :  : subproof
+	proofgoal #1
+		rup >= 1 : 16 8;
+	qed : 18;
+qed;
+delc 2 :  : subproof
+	proofgoal #1
+		rup >= 1 : 19 8;
+	qed : 21;
+qed;
+delc 1 :  : subproof
+	proofgoal #1
+		rup >= 1 : 22 8;
+	qed : 24;
+qed;
+deld 4;
+delc 8 :  x1 -> 0 x2 -> 0 x3 -> 1 x4 -> 1 : subproof
+qed;
+delc 10 :  x1 -> 0 x2 -> 0 x3 -> 1 x4 -> 1 : subproof
+qed;
+output NONE ;
+conclusion BOUNDS 2 : 15 2 : x1 ~x2 ~x3;
+end pseudo-Boolean proof;

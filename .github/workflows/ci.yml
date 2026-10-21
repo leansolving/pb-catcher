@@ -1,0 +1,27 @@
+name: CI
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the Lean toolchain
+        uses: leanprover/lean-action@v1
+        with:
+          build: "false"
+          test: "false"
+          lint: "false"
+      - name: Build the kernel, the tests and every application theorem
+        # The checker modules are precompiled and loaded as a shared library,
+        # which needs the toolchain's lib/lean on the loader path (Linux).
+        run: |
+          echo "LD_LIBRARY_PATH=$(lean --print-libdir)" >> "$GITHUB_ENV"
+          export LD_LIBRARY_PATH="$(lean --print-libdir)"
+          lake build
+      - name: Axiom audit
+        run: lake env lean scripts/Axioms.lean

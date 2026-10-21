@@ -1,6 +1,7 @@
 # PBLean: VeriPB Proof Certificates for Lean 4
 
-[![Lean 4](https://img.shields.io/badge/Lean-4.30.0-blue?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHRleHQgeD0iNCIgeT0iMjYiIGZvbnQtc2l6ZT0iMjgiIGZpbGw9IndoaXRlIj5MPC90ZXh0Pjwvc3ZnPg==)](https://lean-lang.org/)
+[![CI](https://github.com/leansolving/pblean/actions/workflows/ci.yml/badge.svg)](https://github.com/leansolving/pblean/actions/workflows/ci.yml)
+[![Lean](https://img.shields.io/badge/Lean-v4.30.0-blue)](https://github.com/leanprover/lean4/releases/tag/v4.30.0)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 **PBLean** provides verified pseudo-Boolean proof checking in Lean 4. Reads [VeriPB](https://gitlab.com/MIAOresearch/software/VeriPB) kernel-format proofs and produces Lean theorems, analogous to `Std.Tactic.BVDecide` (LRAT) but for pseudo-Boolean reasoning. VeriPB's kernel format is the fully-elaborated proof format produced by `veripb --elaborate`, in which every inference step is made explicit. Standalone Lean 4 project with no Mathlib dependency.
@@ -15,19 +16,23 @@ Three-layer design mirroring LRAT:
 |-------|------|-------------|
 | Kernel | `VeriPB/Tactic/Sat/PseudoBoolean.lean` | PB constraint types, evaluation, soundness lemmas |
 | Metaprogram | `VeriPB/Tactic/Sat/FromVeriPB.lean` | Parser, normalization, `Expr`-level proof construction |
-| Reflection | `VeriPB/Tactic/Sat/ReflectCheck.lean` | Verified checker definitions (pol, RUP, red coverage) |
+| Reflection | `VeriPB/Tactic/Sat/ReflectCheck.lean` | Verified checker definitions (pol, RUP, redundance goals) |
 | Reflection | `VeriPB/Tactic/Sat/ReflectFast.lean` | Runtime implementation of the checker (`@[implemented_by]`) |
-| Reflection | `VeriPB/Tactic/Sat/Reflect.lean` | `checkProofBool`, soundness proof, `veripb_reflect`, `mkFormulaUnsatProof` |
+| Reflection | `VeriPB/Tactic/Sat/Reflect.lean` | `checkProofBool`, `proofClaim?`, soundness proofs, `veripb_reflect`, `mkFormulaUnsatProof` |
 
 Verification uses reflection: a Boolean checker with a proved soundness theorem, executed as compiled native code via `native_decide` (same trade-off as `bv_decide`). The verified checker is written over lists for provability; at runtime `@[implemented_by]` swaps in an array-based implementation that must be extensionally equal to it. That equality is tested, not proved: `Tests/Normalize.lean` and `Tests/FastConstr.lean` compare the runtime operations against verbatim copies of the verified definitions on random inputs, and `Tests/Differential.lean` (and `applications/difftest.lean` for the large proofs) runs both checkers side by side and requires identical constraint databases after every proof step.
 
 Downstream projects that produce `formulaUnsat` theorems from their own encodings can call `VeriPB.Reflect.mkFormulaUnsatProof` to build the reflection bridge term instead of assembling it by hand.
 
+`veripb_reflect name "f.opb" "p.pbp"` registers a theorem that matches the proof's conclusion: `formulaUnsat F` for `conclusion UNSAT`, `formulaSatisfiable F` for `conclusion SAT`, and `formulaBounds F obj offset lb ub` for `conclusion BOUNDS lb : id ub` (every solution has objective value at least `lb`, some solution has value at most `ub`; `none` stands for `INF`). The objective in the statement is the normalized min-form objective `objVal obj v + offset` (normalized nonnegative terms `obj`, constant `offset`). For `max: f` the parser negates the objective, as VeriPB does, so the statement is about `−f`: `lb` gives `f ≤ −lb` for every solution and `ub` gives a solution with `f ≥ −ub`. `formulaBounds_optimum` turns equal bounds into the optimum. The conclusion must close the proof as in VeriPB and CakePB: the only `output` line (`output NONE ;`, or an output claim `output DERIVABLE|EQUISATISFIABLE|EQUIOPTIMAL FILE ;` accepted under CakePB's bound-side conditions; the claim about the output formula is not certified, and the message says so), then the only `conclusion` line, then the end line.
+
 ## Supported VeriPB rules
 
-`pol` (polynomial arithmetic, including `x w` weakening), `rup` (reverse unit propagation), `pbc`/`subproof`/`qed` (proof by contradiction), `red`/`dom` (redundance and dominance-based strengthening), `deld`/`delc` (deletion), `sol`/`soli` (solution), `f` (formula size), `output`, `conclusion UNSAT/SAT/BOUNDS`.
+`pol` (polynomial arithmetic: `+`, `*`, `d`, `s`, `w` weakening, `-`, `c` division in variable form, `n`/`m` mixed-integer rounding), `rup` (reverse unit propagation), `ia` (implication), `pbc`/`subproof`/`qed` (proof by contradiction), `red` (redundance-based strengthening with explicit subproofs and proof goals), `deld`/`delc` (deletion, including checked core deletion `delc id : witness : subproof`), `core`, `strengthening_to_core`, `sol`/`soli`/`obji` (solution logging and objective-improvement assertions), `eobj`/`obju new|diff` (objective equality and objective updates with core-only subproofs), `f` (formula size), `output NONE` and `output DERIVABLE/EQUISATISFIABLE/EQUIOPTIMAL FILE` (accepted as footers under CakePB's bound-side preconditions; the claim about the output formula itself is not certified, the registered theorem is the conclusion's), `conclusion UNSAT/SAT/BOUNDS/NONE`. Parsed but rejected by the checker until implemented: `dom` with `def_order`/`load_order`/`scope`, and `output ... IMPLICIT/PERMUTATION/CONSTRAINTS`.
 
-Known completeness gaps relative to VeriPB's checker (PBLean rejects, VeriPB accepts; never the other way round): input constraints are used as written rather than normalized, so RUP propagation over an input constraint with a repeated variable is weaker; `rup C` with an empty hint list propagates only over the negation of `C`, not over the whole database; a `pol` intermediate whose degree would become negative is truncated to 0 (VeriPB keeps the negative degree), which can make a later derivation from it weaker; and `rup` certifies the conflict by scaled addition of the hints (one complementary pair cancelled per hint) after locating the conflicting hint by propagation, which can miss a conflict that VeriPB's unit propagation finds when several weighted literals are propagated at once. Proofs elaborated by VeriPB from RoundingSat logs do not hit these cases.
+Known differences to VeriPB 3 and CakePB. PBLean rejects some proofs that VeriPB and CakePB accept: input constraints are used as written, not normalized; all `rup` hint ids are resolved before propagation, so an unknown id after the conflicting hint rejects the step; under strengthening-to-core, `red` database goals range over the whole database, while CakePB checks the core only (2 proofs of the VeriPB test suite); dominance, orders and scopes are not supported; an `obju` without `: subproof`, with a closing `qed : id`, or with an unproved non-trivial goal is rejected (VeriPB autoproves such goals, CakePB rejects them). An OPB objective without terms counts as absent, so `obji`/`eobj`/`obju` on it are rejected (both references accept). Output claims `output G FILE` are accepted without the output formula when the bound-side conditions hold (CakePB rejects `EQUISATISFIABLE`/`EQUIOPTIMAL` without the file); `sol : v` on an instance without objective is accepted with `v = 0` (CakePB; VeriPB rejects). PBLean accepts some proofs that VeriPB rejects, without losing soundness: a negative degree is clamped to 0, which gives a stronger constraint; and checked deletion under strengthening-to-core does not require an empty witness (CakePB accepts this too). Conclusions follow CakePB: an upper bound above the best solution value and `conclusion SAT`/`UNSAT` on an instance with an objective are accepted (VeriPB rejects them), and the lower bound of `conclusion BOUNDS` needs its hint `lb : id`, whose constraint must imply the bound even when the database contains a contradiction elsewhere (VeriPB searches the database). `conclusion UNSAT` after a logged solution is rejected, as by both references. `conclusion SAT : ;` is read as the all-false assignment, as CakePB does; VeriPB reads it as no hint (likewise an upper bound `ub : ;`).
+
+In `veripb_reflect`, `rup C : hints` is checked by verified PB unit propagation as CakePB checks it: one pass over the hints in order, the negated target through an explicit `~`. The Expr-level `veripb_proof` path keeps its addition-based certificate.
 
 ## Application modules
 
@@ -47,6 +52,8 @@ theorem paley89_alpha  : independenceNumber (paley 89)  5
 theorem paley97_alpha  : independenceNumber (paley 97)  6
 theorem paley101_alpha : independenceNumber (paley 101) 5
 ```
+
+The same eleven independence numbers are also proved from one *optimization* proof each (`independent_set_opt_reflect`, namespace `PaleyOptShowcase`): RoundingSat minimizes `-1 x1 ... -1 xp` over the edge constraints and its elaborated proof ends with `conclusion BOUNDS -k : id -k : solution`, which the bridge theorem `independenceNumber_of_bounds` turns into `independenceNumber (paley p) k`, both directions from a single certificate (the decision route above needs an UNSAT proof plus a witness checked by `native_decide`). All eleven take about 13 s together.
 
 The data yields a formally verified non-monotonicity result: α(Paley(97)) = 6 > 5 = α(Paley(101)).
 ```lean
@@ -94,10 +101,28 @@ theorem k331_eq_chromatic : equitableChromaticNumber k331 5
 theorem php32_red_reflect : formulaUnsat
 ```
 
-**Bin packing** (`BinPacking.lean`) — 12 items of sizes [10,9,8,8,6,5,4,4,4,4,4,4] do not fit into 5 bins of capacity 14. The total size equals 5×14 = 70 (not refutable by weight alone); unsatisfiability follows from a rounding argument on the capacity constraints.
+**Bin packing** (`BinPacking.lean`) — 12 items of sizes [10,9,8,8,6,5,4,4,4,4,4,4] do not fit into 5 bins of capacity 14. The total size equals 5×14 = 70 (not refutable by weight alone); unsatisfiability follows from a rounding argument on the capacity constraints. The optimization form (`binpack_opt_reflect`, bin-use variables `y_j`, objective `min: Σ y_j`) proves that 6 bins are the minimum from one proof with 6 or with 7 bins available.
 ```lean
 -- BinPacking namespace
 theorem bp12_5_impossible : ¬hasPacking inst12_5
+theorem bp12_m6_minBins : minBins inst12_m6 6
+theorem bp12_m7_minBins : minBins inst12_m7 6
+```
+
+**Vertex cover** (`VertexCover.lean`) — Minimum vertex covers from one optimization proof each (`vertex_cover_reflect`): the Petersen graph needs 6 vertices, Paley(13), Paley(17) and Paley(29) need 10, 14 and 25.
+```lean
+-- VertexCoverShowcase namespace
+theorem petersen_tau : vertexCoverNumber petersen 6
+theorem paley13_tau  : vertexCoverNumber (paley 13) 10
+theorem paley17_tau  : vertexCoverNumber (paley 17) 14
+theorem paley29_tau  : vertexCoverNumber (paley 29) 25
+```
+
+**Chromatic number** (`Chromatic.lean`) — Colour-class variables with colour-use indicators, objective `min: Σ y_c` (`chromatic_reflect g k c` with `k` colours available): the Petersen graph has chromatic number 3 and the Grötzsch graph (Mycielski of C₅) has chromatic number 4.
+```lean
+-- ChromaticShowcase namespace
+theorem petersen_chi  : chromaticNumber petersen 3
+theorem groetzsch_chi : chromaticNumber groetzsch 4
 ```
 
 **Predicate convention:** Each predicate `fooNumber n` asserts that `n` is the largest value for which the feasibility condition holds. For example, `ramseyNumber 5` means K₅ admits a Ramsey-free 2-coloring but K₆ does not, hence R(3,3) = 6.

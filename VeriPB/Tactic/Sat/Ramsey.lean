@@ -381,16 +381,20 @@ elab "ramsey_reflect " nm:ident ppSpace nTerm:num
     let numVarsExpr :=
       mkApp (mkConst ``numVarsInternal) nExpr
     let proofStrExpr := mkStrLit proofStr
-    let checkExpr := mkApp3
+    let checkExpr := mkApp5
       (mkConst ``VeriPB.Reflect.checkProofBool)
-      constrsExpr numVarsExpr proofStrExpr
+      constrsExpr numVarsExpr
+      VeriPB.Reflect.emptyObjectiveExpr VeriPB.Reflect.emptyNamesExpr
+      proofStrExpr
     let hEqTrue ← match ← Lean.Meta.nativeEqTrue `ramsey_reflect checkExpr
         (axiomDeclRange? := (← getRef)) with
       | .success prf => pure prf
       | .notTrue => throwError "Reflection checker returned false for {name}"
-    let unsatProof := mkApp4
+    let unsatProof := mkApp6
       (mkConst ``VeriPB.Reflect.checkProof_sound)
-      constrsExpr numVarsExpr proofStrExpr hEqTrue
+      constrsExpr numVarsExpr
+      VeriPB.Reflect.emptyObjectiveExpr VeriPB.Reflect.emptyNamesExpr
+      proofStrExpr hEqTrue
     let finalProof := mkApp2
       (mkConst ``no_ramsey_free_of_unsat)
       nExpr unsatProof
@@ -627,16 +631,20 @@ elab "ramsey_asym_reflect " nm:ident ppSpace nTerm:num
     let proofStr ← IO.FS.readFile (System.FilePath.mk proofPath)
     let constrsExpr := mkApp3 (mkConst ``encodeAsym) nExpr sExpr tExpr
     let proofStrExpr := mkStrLit proofStr
-    let checkExpr := mkApp3
+    let checkExpr := mkApp5
       (mkConst ``VeriPB.Reflect.checkProofBool)
-      constrsExpr numVarsExpr proofStrExpr
+      constrsExpr numVarsExpr
+      VeriPB.Reflect.emptyObjectiveExpr VeriPB.Reflect.emptyNamesExpr
+      proofStrExpr
     let hEqTrue ← match ← Lean.Meta.nativeEqTrue `ramsey_asym_reflect checkExpr
         (axiomDeclRange? := (← getRef)) with
       | .success prf => pure prf
       | .notTrue => throwError "Reflection checker returned false for {name}"
-    let unsatProof := mkApp4
+    let unsatProof := mkApp6
       (mkConst ``VeriPB.Reflect.checkProof_sound)
-      constrsExpr numVarsExpr proofStrExpr hEqTrue
+      constrsExpr numVarsExpr
+      VeriPB.Reflect.emptyObjectiveExpr VeriPB.Reflect.emptyNamesExpr
+      proofStrExpr hEqTrue
     -- Build side-condition proofs: s ≥ 2, t ≥ 2
     if s < 2 then throwError "s must be ≥ 2"
     if t < 2 then throwError "t must be ≥ 2"

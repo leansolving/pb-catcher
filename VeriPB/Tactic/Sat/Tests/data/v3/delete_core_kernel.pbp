@@ -1,0 +1,10 @@
+pseudo-Boolean proof version 3.0
+f 3;
+delc 2 :  : subproof
+	proofgoal #1
+		rup >= 1 : 4 3;
+	qed : 6;
+qed;
+output NONE ;
+conclusion NONE;
+end pseudo-Boolean proof;

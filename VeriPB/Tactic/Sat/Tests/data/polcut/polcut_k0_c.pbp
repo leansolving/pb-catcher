@@ -1,0 +1,6 @@
+pseudo-Boolean proof version 3.0
+f 6 ;
+pol 1 0 c ;
+output NONE ;
+conclusion NONE ;
+end pseudo-Boolean proof ;

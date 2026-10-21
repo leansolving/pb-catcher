@@ -1,0 +1,9 @@
+pseudo-Boolean proof version 3.0
+f 4 ;
+strengthening_to_core on ;
+delc 4 : x4 -> 1 : subproof
+pol 1 2 + 3 + 5 2 * + ;
+qed : 6 ;
+output NONE ;
+conclusion NONE ;
+end pseudo-Boolean proof ;
