@@ -1,0 +1,15 @@
+pseudo-Boolean proof version 3.0
+f 4;
+pol 1 2 + 2 d;
+pol 3 4 + 2 d;
+pol 6 5 +;
+rup 1 x1 >= 1 : 7 ~;
+core id 8;
+obju diff 2 ~x1 0 : subproof
+	proofgoal #2
+		rup >= 1 : 8 9;
+	qed : 10;
+qed;
+output NONE ;
+conclusion NONE;
+end pseudo-Boolean proof;

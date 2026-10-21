@@ -242,6 +242,160 @@ veripb_reflect solution_logging_max_objective_reflect
 example := (solution_logging_max_objective_reflect :
   VeriPB.Reflect.formulaBounds _ _ (-6) (some (-2)) (some (-2)))
 
+-- `obji -2` asserts the value -2 without a solution: it gives the lower
+-- bound (the asserted value lowers the threshold and its constraint is
+-- used in the derivation); the upper bound needs the conclusion solution.
+veripb_reflect objective_improving_reflect
+  "VeriPB/Tactic/Sat/Tests/data/v3/objective_improving.opb"
+  "VeriPB/Tactic/Sat/Tests/data/v3/objective_improving_kernel.pbp"
+
+example := (objective_improving_reflect :
+  VeriPB.Reflect.formulaBounds _ _ (-6) (some (-2)) (some (-2)))
+
+-- `obji` without a witnessed solution: lower bound only.
+veripb_reflect obji3_lb_reflect
+  "VeriPB/Tactic/Sat/Tests/data/concl/obji3.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/obji3_lb.pbp"
+
+example := (obji3_lb_reflect :
+  VeriPB.Reflect.formulaBounds _ _ (-6) (some (-2)) none)
+
+-- Rejected after `obji` (VeriPB and CakePB too): a finite upper bound
+-- without a solution, UNSAT, SAT without a solution, INF lower bound.
+/-- error: VeriPB reflection checker rejected the proof -/
+#guard_msgs in
+veripb_reflect obji3_ub_nowit_bad
+  "VeriPB/Tactic/Sat/Tests/data/concl/obji3.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/obji3_ub_nowit.pbp"
+
+/-- error: VeriPB reflection checker rejected the proof -/
+#guard_msgs in
+veripb_reflect obji3_unsat_bad
+  "VeriPB/Tactic/Sat/Tests/data/concl/obji3.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/obji3_unsat.pbp"
+
+/-- error: VeriPB reflection checker rejected the proof -/
+#guard_msgs in
+veripb_reflect obji3_sat_nowit_bad
+  "VeriPB/Tactic/Sat/Tests/data/concl/obji3.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/obji3_sat_nowit.pbp"
+
+/-- error: VeriPB reflection checker rejected the proof -/
+#guard_msgs in
+veripb_reflect obji3_lb_inf_bad
+  "VeriPB/Tactic/Sat/Tests/data/concl/obji3.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/obji3_lb_inf.pbp"
+
+-- `obju new`/`diff` with core-only subproofs and `eobj`: the bounds are
+-- about the original objective (`conclusion_BOUNDS_objective_change` ends
+-- with the objective `1 ~x4 2` and a witness evaluated on the original).
+veripb_reflect objective_update_subproof_reflect
+  "VeriPB/Tactic/Sat/Tests/data/v3/objective_update_subproof.opb"
+  "VeriPB/Tactic/Sat/Tests/data/v3/objective_update_subproof_kernel.pbp"
+
+veripb_reflect objective_update_diff_check_reflect
+  "VeriPB/Tactic/Sat/Tests/data/v3/objective_update_diff_check.opb"
+  "VeriPB/Tactic/Sat/Tests/data/v3/objective_update_diff_check_kernel.pbp"
+
+veripb_reflect objective_update_diff_reflect
+  "VeriPB/Tactic/Sat/Tests/data/v3/objective_update_diff.opb"
+  "VeriPB/Tactic/Sat/Tests/data/v3/objective_update_diff_kernel.pbp"
+
+veripb_reflect conclusion_BOUNDS_objective_change_reflect
+  "VeriPB/Tactic/Sat/Tests/data/v3/conclusion_BOUNDS_objective_change.opb"
+  "VeriPB/Tactic/Sat/Tests/data/v3/conclusion_BOUNDS_objective_change_kernel.pbp"
+
+example := (conclusion_BOUNDS_objective_change_reflect :
+  VeriPB.Reflect.formulaBounds _ _ 0 (some 2) (some 2))
+
+-- Rejected (CakePB too): an `obju` goal without proofgoal that is not
+-- trivial, a wrong new objective, an `eobj` that does not match.
+/-- error: VeriPB reflection checker rejected the proof -/
+#guard_msgs in
+veripb_reflect ou3_obju_missing2_bad
+  "VeriPB/Tactic/Sat/Tests/data/concl/ou3.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/ou3_obju_missing2.pbp"
+
+/-- error: VeriPB reflection checker rejected the proof -/
+#guard_msgs in
+veripb_reflect ou3_obju_wrongobj_bad
+  "VeriPB/Tactic/Sat/Tests/data/concl/ou3.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/ou3_obju_wrongobj.pbp"
+
+/-- error: VeriPB reflection checker rejected the proof -/
+#guard_msgs in
+veripb_reflect ou3_eobj_bad
+  "VeriPB/Tactic/Sat/Tests/data/concl/ou3.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/ou3_eobj_bad.pbp"
+
+-- Output claims are accepted as footers under CakePB's bound-side
+-- conditions; the theorem is the conclusion's and the info message says
+-- that the claim about the output formula is not certified.
+/--
+info: Registered VeriPB.Tests.Reflect.optimization_output_reflect : formulaBounds, 2 ≤ objective ≤ 2 [output claim EQUIOPTIMAL FILE not certified] (checked via reflection)
+-/
+#guard_msgs in
+veripb_reflect optimization_output_reflect
+  "VeriPB/Tactic/Sat/Tests/data/v3/optimization_output_opposing_lits_objective.opb"
+  "VeriPB/Tactic/Sat/Tests/data/v3/optimization_output_opposing_lits_objective_kernel.pbp"
+
+veripb_reflect vc6_out_equiopt_reflect
+  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/vc6_out_equiopt.pbp"
+
+-- The UNSAT path (`checkProofBool`) accepts the same footers.
+/--
+info: Registered VeriPB.Tests.Reflect.php21_out_derivable_reflect : formulaUnsat [output claim DERIVABLE FILE not certified] (checked via reflection)
+-/
+#guard_msgs in
+veripb_reflect php21_out_derivable_reflect
+  "VeriPB/Tactic/Sat/Tests/data/php21.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/php21_out_derivable.pbp"
+
+veripb_reflect sat3_out_equisat_sol_reflect
+  "VeriPB/Tactic/Sat/Tests/data/concl/sat3.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/sat3_out_equisat_sol.pbp"
+
+-- EQUIOPTIMAL after a plain `delc` (checked deletion off) and `IMPLICIT`
+-- outputs are rejected.
+/-- error: VeriPB reflection checker rejected the proof -/
+#guard_msgs in
+veripb_reflect vc6_out_equiopt_delc_bad
+  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/vc6_out_equiopt_delc.pbp"
+
+/-- error: VeriPB reflection checker rejected the proof -/
+#guard_msgs in
+veripb_reflect vc6_out_implicit_bad
+  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/vc6_out_implicit.pbp"
+
+-- Inside the core-only `obju` subproof every derived constraint is core:
+-- `deld` is rejected (VeriPB and CakePB too).
+/-- error: VeriPB reflection checker rejected the proof -/
+#guard_msgs in
+veripb_reflect ou3_obju_deld_bad
+  "VeriPB/Tactic/Sat/Tests/data/concl/ou3.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/ou3_obju_deld.pbp"
+
+-- After a plain `delc` (checked deletion off) logged solutions are no
+-- witnesses (VeriPB and CakePB too): the conclusion needs the solution.
+veripb_reflect vc6_ub_after_delc_wit_reflect
+  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/vc6_ub_after_delc_wit.pbp"
+
+/-- error: VeriPB reflection checker rejected the proof -/
+#guard_msgs in
+veripb_reflect vc6_ub_after_delc_bad
+  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/vc6_ub_after_delc.pbp"
+
+/-- error: VeriPB reflection checker rejected the proof -/
+#guard_msgs in
+veripb_reflect sat3_sol_after_delc_bad
+  "VeriPB/Tactic/Sat/Tests/data/concl/sat3.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/sat3_sol_after_delc.pbp"
+
 -- Rejected by the command (and by VeriPB and CakePB): wrong lower bound,
 -- wrong upper bound, wrong solution value, finite upper bound without a
 -- solution, SAT with a non-solution.

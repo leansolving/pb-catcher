@@ -108,8 +108,12 @@ def runOneClaim (name opbPath proofPath : String) (fullEvery : Nat := 1)
     | some s, some f =>
       if s.nextId != f.nextId then
         throw (IO.userError s!"{name}: MISMATCH at step {k}: nextId {s.nextId} vs {f.nextId}")
-      if s.best != f.best || s.offset != f.offset then
-        throw (IO.userError s!"{name}: MISMATCH at step {k}: best {s.best} vs {f.best}")
+      if s.best != f.best || s.bestWit != f.bestWit then
+        throw (IO.userError s!"{name}: MISMATCH at step {k}: best {s.best} vs \
+          {f.best}, bestWit {s.bestWit} vs {f.bestWit}")
+      if s.offset != f.offset || s.curOffset != f.curOffset ||
+          s.curObj != f.curObj || s.chk != f.chk then
+        throw (IO.userError s!"{name}: MISMATCH at step {k}: objective fields")
       if s.s2c != f.s2c || sortedIds s.coreIds != sortedIds f.coreIds then
         throw (IO.userError s!"{name}: MISMATCH at step {k}: core sets \
           {sortedIds s.coreIds} vs {sortedIds f.coreIds}")
@@ -142,12 +146,16 @@ def runOneClaim (name opbPath proofPath : String) (fullEvery : Nat := 1)
     throw (IO.userError s!"{name}: conclusion differs: verified {okSlow}, fast {okFast}")
   -- the claim of the last conclusion step (SAT, BOUNDS, optimality), as
   -- `proofClaim?` and `Fast.proofClaimFast?` evaluate it on the final states
-  let claim? (getC : Nat → Option Constr) (best : Option Nat) : Option Claim :=
-    match lastConclusion proof.steps with
-    | some st => conclusionClaim getC constrs obj offset best st
+  let claim? (getC : Nat → Option Constr) (ctx : ConclCtx) : Option Claim :=
+    match lastFooter proof.steps with
+    | some (o, st) =>
+      if outputClaimOk ctx o then conclusionClaim getC constrs ctx st else none
     | none => none
-  let cSlow := claim? (fun id => slow.db[id]?) slow.best
-  let cFast := claim? (fun id => (fast.db[id]?).map Fast.fromFConstr) fast.best
+  let cSlow := claim? (fun id => slow.db[id]?) slow.conclCtx
+  let cFast := claim? (fun id => (fast.db[id]?).map Fast.fromFConstr)
+    { objective := fast.objective, offset := fast.offset, curObj := fast.curObj,
+      curOffset := fast.curOffset, best := fast.best, bestWit := fast.bestWit,
+      chk := fast.chk }
   if cSlow != cFast then
     throw (IO.userError s!"{name}: claim differs: verified {repr cSlow}, fast {repr cFast}")
   -- the runtime entry point (`proofClaim?` is `@[implemented_by]` it)
@@ -219,10 +227,41 @@ open VeriPB.Tests.Differential VeriPB.Reflect in
       "solution_logging_improving_optimal_optional_value", "solution_logging_max_objective",
       "solution_logging_optional_value"] do
     runOne n (v ++ n ++ ".opb") (v ++ n ++ "_kernel.pbp")
-  for (n, k) in [("decision_output", 8), ("dominance_simple_order", 2),
-      ("dominance_with_aux_vars", 2), ("objective_improving", 2),
-      ("objective_update_diff_check", 1), ("objective_update_subproof", 8),
-      ("optimization_output_opposing_lits_objective", 8),
+  -- `obji` (P2b): the bound comes from the asserted value, the witness from
+  -- the conclusion solution
+  runExpect "objective_improving" (v ++ "objective_improving.opb")
+    (v ++ "objective_improving_kernel.pbp") (some (.bounds (some (-2)) (some (-2))))
+  -- `obju`/`eobj` (P2b): objective updates with core-only subproofs
+  for n in ["objective_update_subproof", "objective_update_diff_check",
+      "objective_update_diff", "conclusion_BOUNDS_objective_change"] do
+    runExpect n (v ++ n ++ ".opb") (v ++ n ++ "_kernel.pbp")
+      (some (.bounds (some 2) (some 2)))
+  runExpect "move_to_core_indexing" (v ++ "move_to_core_indexing.opb")
+    (v ++ "move_to_core_indexing_kernel.pbp") none
+  -- output claims (B3): accepted as footers (bound-side preconditions), the
+  -- theorem is the conclusion's
+  runExpect "decision_output" (v ++ "decision_output.opb")
+    (v ++ "decision_output_kernel.pbp") none
+  for n in ["optimization_output_opposing_lits_objective",
+      "optimization_version2_objective_update_output"] do
+    runExpect n (v ++ n ++ ".opb") (v ++ n ++ "_kernel.pbp")
+      (some (.bounds (some 2) (some 2)))
+  -- output claims, bound side (CakePB `check_output` without the output
+  -- formula): DERIVABLE needs no logged value, EQUISATISFIABLE no logged and
+  -- no witnessed value and checked deletion on, EQUIOPTIMAL checked deletion
+  -- on and threshold = witnessed value; IMPLICIT is rejected
+  for (o, n, c) in [("vc6.opb", "vc6_out_equiopt", some (Claim.bounds (some 3) (some 3))),
+      ("vc6.opb", "vc6_out_derivable_sol", none), ("vc6.opb", "vc6_out_equisat_sol", none),
+      ("vc6.opb", "vc6_out_equiopt_delc", none), ("vc6.opb", "vc6_out_implicit", none),
+      ("concl/obji3.opb", "obji3_out_equiopt", none),
+      ("concl/sat3.opb", "sat3_out_derivable", none), ("concl/sat3.opb", "sat3_out_equisat", none),
+      ("concl/sat3.opb", "sat3_out_equisat_sol", some Claim.sat),
+      ("concl/sat3.opb", "sat3_out_equiopt", none),  -- EQUIOPTIMAL needs an objective
+      ("php21.opb", "php21_out_derivable", some Claim.unsat)] do
+    runExpect n (d ++ o) (d ++ "concl/" ++ n ++ ".pbp") c
+  -- rejected at dominance (P3)
+  for (n, k) in [("dominance_simple_order", 2),
+      ("dominance_with_aux_vars", 2),
       ("strengthening_to_core", 3)] do
     runOne n (v ++ n ++ ".opb") (v ++ n ++ "_kernel.pbp") (expectReject := some k)
   -- Hand-written tests for the T3 statements (Tests/data/t3). Every accepted
@@ -326,8 +365,43 @@ open VeriPB.Tests.Differential VeriPB.Reflect in
       ("concl/sat3.opb", "sat3_hint", some Claim.sat),
       ("concl/sat3.opb", "sat3_sol", some Claim.sat),
       ("concl/sat3.opb", "sat3_bad", none),         -- the listed assignment is no solution
-      ("concl/sat3.opb", "sat3_nosol", none)] do    -- no solution listed or logged
+      ("concl/sat3.opb", "sat3_nosol", none),       -- no solution listed or logged
+      -- obji3.opb (= objective_improving: min: -2 x1 -2 x2 -2 x3, optimum -2):
+      -- `obji -2` gives the lower bound; without a witnessed solution no
+      -- upper bound, no SAT and no UNSAT (both references agree)
+      ("concl/obji3.opb", "obji3_lb", some (Claim.bounds (some (-2)) none)),
+      ("concl/obji3.opb", "obji3_lb_wit", some (Claim.bounds (some (-2)) (some (-2)))),
+      ("concl/obji3.opb", "obji3_ub_nowit", none),
+      ("concl/obji3.opb", "obji3_unsat", none),
+      ("concl/obji3.opb", "obji3_sat_nowit", none),
+      ("concl/obji3.opb", "obji3_lb_inf", none),
+      -- after a plain `delc` (checked deletion off) a logged solution is no
+      -- witness: SAT and a finite upper bound need the explicit solution
+      -- (VeriPB and CakePB agree)
+      ("concl/sat3.opb", "sat3_sol_after_delc", none),
+      ("concl/sat3.opb", "sat3_sol_after_delc_wit", some Claim.sat),
+      ("vc6.opb", "vc6_ub_after_delc", none),
+      ("vc6.opb", "vc6_ub_after_delc_wit", some (Claim.bounds (some 3) (some 3))),
+      -- ou3.opb (= objective_update_subproof): `eobj` after `obju`
+      ("concl/ou3.opb", "ou3_eobj_ok", some (Claim.bounds (some 2) (some 2))),
+      -- nobj3.opb (decision instance): `sol`, also with the value 0 (CakePB;
+      -- VeriPB rejects a value without objective)
+      ("concl/nobj3.opb", "nobj3_sol", some Claim.sat),
+      ("concl/nobj3.opb", "nobj3_solval", some Claim.sat)] do
     runExpect n (d ++ o) (cd ++ n ++ ".pbp") c
+  -- `obju`/`eobj` rejections (CakePB rejects all; VeriPB accepts the first
+  -- and the third by autoproving the goals): no subproof, `qed : id` on the
+  -- subproof, a non-trivial goal without proofgoal, a wrong new objective,
+  -- `eobj` mismatch, a non-core premise in the subproof; `obji`/`eobj`
+  -- without objective
+  for (o, n, k) in [("concl/ou3.opb", "ou3_obju_nosub", 8),
+      ("concl/ou3.opb", "ou3_obju_qedid", 8), ("concl/ou3.opb", "ou3_obju_missing2", 8),
+      ("concl/ou3.opb", "ou3_obju_wrongobj", 8), ("concl/ou3.opb", "ou3_eobj_bad", 9),
+      ("concl/ou3.opb", "ou3_obju_noncore", 7), ("concl/nobj3.opb", "nobj3_obji", 1),
+      ("concl/nobj3.opb", "nobj3_eobj", 1),
+      -- `deld` of a constraint derived inside the core-only subproof
+      ("concl/ou3.opb", "ou3_obju_deld", 8)] do
+    runOne n (d ++ o) (cd ++ n ++ ".pbp") (expectReject := some k)
   -- a wrong value after a logged solution is rejected at the soli step
   for (o, n) in [("vc6.opb", "vc6_solval_bad"),        -- soli ... : 4 (value 3)
       ("concl/off3.opb", "off3_solval_nooffset"),          -- soli ... : 4 (objVal 4, value -2)

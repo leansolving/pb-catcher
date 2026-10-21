@@ -63,8 +63,14 @@ structure FBoolCheckState where
   db : Std.HashMap Nat FConstr
   origConstrs : Array Constr
   objective : Objective
-  best : Option Nat
   offset : Int := 0
+  curObj : Objective
+  curOffset : Int := 0
+  best : Option Int
+  bestWit : Option Int
+  chk : Bool := true
+  hasObj : Bool := true
+  coreOnly : Bool := false
   nextId : Nat
   numVars : Nat
   formulaSize : Nat
@@ -500,8 +506,14 @@ def FBoolCheckState.fromConstrs (constrs : Array Constr)
       (db.insert i (toFConstr c), i + 1)) ({}, 1) |>.1
     origConstrs := constrs
     objective := objective
-    best := none
     offset := offset
+    curObj := objective
+    curOffset := offset
+    best := none
+    bestWit := none
+    chk := true
+    hasObj := !objective.isEmpty
+    coreOnly := false
     nextId := constrs.size + 1
     numVars := numVars
     formulaSize := constrs.size
@@ -543,11 +555,11 @@ def impliesSyntacticF (S T : FConstr) : Bool := Id.run do
     | some t => if t < sc && t < B then cost := cost + (sc - t)
   return decide (B + cost ≤ S.degree)
 
-/-- Mirrors `checkSolution`: the same literal conversion, with the valuation
+/-- Mirrors `checkSolutionVals`: the same literal conversion, with the valuation
 `solValuation` stored as the hash set of the variables whose positive
 literal is listed (a variable is true iff it is in the set). -/
-def checkSolutionF (F : Array Constr) (obj : Objective)
-    (lits : List VeriPB.OPBLit) : Option Nat :=
+def checkSolutionValsF (F : Array Constr) (obj curObj : Objective)
+    (lits : List VeriPB.OPBLit) : Option (Nat × Nat) :=
   match lits.mapM VeriPB.opbLitToPB with
   | .error _ => none
   | .ok pl =>
@@ -559,7 +571,8 @@ def checkSolutionF (F : Array Constr) (obj : Objective)
       | .neg i => if trueVars.contains i then 0 else 1
     let evalS (ts : List Sat.PB.Term) : Nat :=
       ts.foldl (fun acc (a, l) => acc + a * val l) 0
-    if F.all (fun c => decide (c.degree ≤ evalS c.terms)) then some (evalS obj)
+    if F.all (fun c => decide (c.degree ≤ evalS c.terms)) then
+      some (evalS obj, evalS curObj)
     else none
 
 /-- Mirrors `redGoalOf` (the goal database holds `FConstr`s). -/
@@ -657,7 +670,7 @@ def checkFRedundance
   let st1 := { st0 with
     db := st0.db.insert st0.nextId (rupNegateF (toFConstr C))
     nextId := st0.nextId + 1 }
-  match processFRedItems execFn (redGoalOfF subst C st0.objective goalDb) st1
+  match processFRedItems execFn (redGoalOfF subst C st0.curObj goalDb) st1
       items [] with
   | none => none
   | some (fin, proved) =>
@@ -666,7 +679,7 @@ def checkFRedundance
         | some c => c.isContra
         | none => false
       | none =>
-        hashGoalsCovered subst C nC st0.objective proved &&
+        hashGoalsCovered subst C nC st0.curObj proved &&
         dbGoalsCoveredF subst nC goalDb proved
     if ok then some fin.nextId else none
 
@@ -690,6 +703,30 @@ def redFStep
           nextId := fid + 1
           coreIds := if state.s2c then state.coreIds.insert fid else state.coreIds }
 
+/-- Mirrors `objuStep` (the core database holds `FConstr`s). -/
+def objuFStep
+    (execFn : FBoolCheckState → List VeriPB.ProofStep → Option FBoolCheckState)
+    (state : FBoolCheckState) (kind : VeriPB.ObjUpdateKind)
+    (pobj : VeriPB.ProofObjective) (items : List VeriPB.ProofStep)
+    (qedHint : Option Nat) : Option FBoolCheckState :=
+  if !state.hasObj || qedHint.isSome then none else
+  match proofObjToPB pobj with
+  | .error _ => none
+  | .ok po =>
+    let nw := objuNew kind state.curObj state.curOffset po.1 po.2
+    let G1 := VeriPB.normalizeConstr
+      (objGeqConstr nw.1 nw.2 state.curObj state.curOffset)
+    let G2 := VeriPB.normalizeConstr
+      (objGeqConstr state.curObj state.curOffset nw.1 nw.2)
+    let coreDb := state.db.filter fun id _ => state.coreIds.contains id
+    match processFRedItems execFn (objuGoalOf G1 G2)
+        { state with db := coreDb, coreOnly := true } items [] with
+    | none => none
+    | some (fin, proved) =>
+      if objuGoalCovered "#1" G1 proved && objuGoalCovered "#2" G2 proved then
+        some { state with curObj := nw.1, curOffset := nw.2, nextId := fin.nextId }
+      else none
+
 /-- Mirrors `delcCheckedStep`. -/
 def delcCheckedFStep
     (execFn : FBoolCheckState → List VeriPB.ProofStep → Option FBoolCheckState)
@@ -711,7 +748,8 @@ def delcCheckedFStep
           let core' := state.coreIds.erase did
           let coreDb := rest.filter fun id _ => core'.contains id
           match checkFRedundance execFn
-              { state with db := coreDb, coreIds := core' } coreDb subst
+              { state with db := coreDb, coreIds := core', coreOnly := true }
+              coreDb subst
               (fromFConstr D) items.toList qedHint with
           | none => none
           | some fid =>
@@ -808,7 +846,8 @@ def execFStepsFuel (fuel : Nat) (state : FBoolCheckState)
         | 0 => none
         | n + 1 => delcCheckedFStep (execFStepsFuel n) state ids substPairs sub
       | .deld ids =>
-        if ids.any state.coreIds.contains then none
+        if ids.any state.coreIds.contains ||
+            (state.coreOnly && ids.any state.db.contains) then none
         else some { state with
           db := ids.foldl (fun db id => db.erase id) state.db
           coreIds := ids.foldl (fun s id => s.erase id) state.coreIds }
@@ -816,7 +855,8 @@ def execFStepsFuel (fuel : Nat) (state : FBoolCheckState)
         if state.s2c && !allCoreF state then none
         else some { state with
           db := ids.foldl (fun db id => db.erase id) state.db
-          coreIds := ids.foldl (fun s id => s.erase id) state.coreIds }
+          coreIds := ids.foldl (fun s id => s.erase id) state.coreIds
+          chk := false }
       | .core ids =>
         if ids.all state.db.contains then
           some { state with coreIds := ids.foldl (fun s id => s.insert id) state.coreIds }
@@ -838,22 +878,46 @@ def execFStepsFuel (fuel : Nat) (state : FBoolCheckState)
         | some c => if c.isContra then some state else none
         | none => none
       | .sol lits value =>
-        match checkSolutionF state.origConstrs state.objective lits with
+        match checkSolutionValsF state.origConstrs state.objective
+            state.curObj lits with
         | none => none
-        | some b' =>
-          if !solValueOk state.offset b' value then none
-          else some { state with best := updBest state.best b' }
+        | some (bo, bc) =>
+          if !solValueOk state.curOffset bc value then none
+          else some { state with
+            best := updBest state.best ((bc : Int) + state.curOffset)
+            bestWit := updBestWit state.chk state.bestWit
+              ((bo : Int) + state.offset) }
       | .soli lits value =>
-        match checkSolutionF state.origConstrs state.objective lits with
+        match checkSolutionValsF state.origConstrs state.objective
+            state.curObj lits with
         | none => none
-        | some b' =>
-          if !solValueOk state.offset b' value then none
+        | some (bo, bc) =>
+          if !solValueOk state.curOffset bc value then none
           else some { state with
             db := state.db.insert state.nextId
-              (toFConstr (improveConstr state.objective b'))
+              (toFConstr (improveConstr state.curObj bc))
             nextId := state.nextId + 1
-            best := updBest state.best b'
+            best := updBest state.best ((bc : Int) + state.curOffset)
+            bestWit := updBestWit state.chk state.bestWit
+              ((bo : Int) + state.offset)
             coreIds := state.coreIds.insert state.nextId }
+      | .obji v =>
+        if !state.hasObj then none
+        else some { state with
+          db := state.db.insert state.nextId
+            (toFConstr (objiConstr state.curObj state.curOffset v))
+          nextId := state.nextId + 1
+          best := updBest state.best v
+          coreIds := state.coreIds.insert state.nextId }
+      | .eobj pobj =>
+        if eobjOk state.hasObj state.curObj state.curOffset pobj then some state
+        else none
+      | .obju kind pobj (some (items, qedHint)) =>
+        match fuel with
+        | 0 => none
+        | n + 1 => objuFStep (execFStepsFuel n) state kind pobj items.toList qedHint
+      | .obju _ _ none => none
+      | .outputClaim _ _ => some state
       | .conclusionSat _ => some state
       | .conclusionBounds _ _ _ _ => some state
       | _ => none  -- statements the checker does not support yet
@@ -862,14 +926,21 @@ def execFStepsFuel (fuel : Nat) (state : FBoolCheckState)
     | none => none
 termination_by (fuel, steps.length)
 
-/-- Runtime mirror of `VeriPB.Reflect.hasUnsatConclusion` (same placement
-rule via the shared `lastConclusion`). -/
+/-- Mirrors `BoolCheckState.conclCtx`. -/
+def FBoolCheckState.conclCtx (s : FBoolCheckState) : ConclCtx :=
+  { objective := s.objective, offset := s.offset, curObj := s.curObj,
+    curOffset := s.curOffset, best := s.best, bestWit := s.bestWit,
+    chk := s.chk }
+
+/-- Runtime mirror of `VeriPB.Reflect.hasUnsatConclusion` (same footer rule
+via the shared `lastFooter` and `outputClaimOk`). -/
 def hasFUnsatConclusion (steps : Array VeriPB.ProofStep)
     (state : FBoolCheckState) : Bool :=
-  state.best.isNone && match lastConclusion steps with
-    | some (.conclusion id) => match state.db[id]? with
-      | some c => c.isContra
-      | none => false
+  state.best.isNone && match lastFooter steps with
+    | some (o, .conclusion id) =>
+      outputClaimOk state.conclCtx o && match state.db[id]? with
+        | some c => c.isContra
+        | none => false
     | _ => false
 
 /-- Runtime implementation of `VeriPB.Reflect.checkProofBool`. -/
@@ -905,10 +976,13 @@ def proofClaimFast? (constrs : Array Constr) (numVars : Nat)
     let fuel := pbcDepth stepsList + 1
     match execFStepsFuel fuel initState stepsList with
     | some s =>
-      match lastConclusion proofData.steps with
-      | some step =>
-        conclusionClaim (fun id => (s.db[id]?).map fromFConstr) constrs
-          objective offset s.best step
+      let ctx := s.conclCtx
+      match lastFooter proofData.steps with
+      | some (o, step) =>
+        if outputClaimOk ctx o then
+          conclusionClaim (fun id => (s.db[id]?).map fromFConstr) constrs ctx
+            step
+        else none
       | none => none
     | none => none
 
