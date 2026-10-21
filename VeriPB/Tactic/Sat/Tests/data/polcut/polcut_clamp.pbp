@@ -1,0 +1,8 @@
+pseudo-Boolean proof version 3.0
+f 6 ;
+pol 5 2 c ;
+pol 7 6 + ;
+ia 1 x5 >= 1 : 8 ;
+output NONE ;
+conclusion NONE ;
+end pseudo-Boolean proof ;

@@ -1,0 +1,14 @@
+pseudo-Boolean proof version 3.0
+f 3;
+pol 1 2 + 3 + 2 d;
+core id 4;
+red 1 ~x1 1 ~x2 1 ~x3 3 ~y1 >= 3 : y1 -> 0 : subproof
+qed;
+red 1 x1 1 x2 1 x3 1 y1 >= 1 : y1 -> 1 : subproof
+qed;
+core id 8;
+pol 4 2 * 6 + 3 d;
+core id 9;
+output EQUISATISFIABLE FILE;
+conclusion NONE;
+end pseudo-Boolean proof;

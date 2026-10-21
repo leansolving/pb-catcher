@@ -326,6 +326,296 @@ theorem div_sat (c : Constr) (k : Nat) (hk : 0 < k) (v : Valuation) (h : c.sat v
           evalSum_ceilDiv_factor v k hk c.terms
   exact ceilDiv_le_of_mul_le c.degree _ k hk (Nat.le_trans h hge)
 
+/-! ### Variable-form division and mixed-integer rounding (`pol` `c`, `n`, `m`)
+
+The three operations follow CakePB (`var_divide`, `mir`, `var_mir` in
+`npbcScript.sml`) and VeriPB (`variable_form_div`, `normalized_form_mir`,
+`variable_form_mir`). CakePB and VeriPB keep integer degrees; here degrees
+are natural numbers, and every degree formula below is CakePB's degree
+truncated at `0` (a constraint of degree `≤ 0` is trivially true).
+
+In *variable form* a negated term `a·¬x` is `−a·x` and the degree is
+`B = A − Σ_neg a`. `k c` rounds every variable-form coefficient up
+(positive `a ↦ ⌈a/k⌉`, negated `a ↦ ⌊a/k⌋`) with degree
+`⌈(A − Σ_neg (a mod k))/k⌉`. The MIR cuts use the rounding function
+`F(z) = ⌊z/k⌋·r + min(z mod k, r)`, which is subadditive and monotone on
+`Nat` for `r < k`; the variable-form cut `k m` is proved by shifting each
+negated term `−a·x` by `⌈a/k⌉·k` into the natural numbers. -/
+
+/-- Drop terms with coefficient `0` (CakePB `strip_zero`). -/
+def stripZero : List Term → List Term
+  | [] => []
+  | (a, l) :: rest => if a = 0 then stripZero rest else (a, l) :: stripZero rest
+
+theorem evalSum_stripZero (v : Valuation) (ts : List Term) :
+    evalSum v (stripZero ts) = evalSum v ts := by
+  induction ts with
+  | nil => rfl
+  | cons hd tl ih =>
+    obtain ⟨a, l⟩ := hd
+    by_cases ha : a = 0 <;> simp [stripZero, ha, evalSum, ih]
+
+/-- `x / k = q` from `x = k * q + s` with `s < k`. -/
+theorem div_eq_of_decomp {k q s x : Nat} (hk : 0 < k) (hs : s < k) (hx : x = k * q + s) :
+    x / k = q :=
+  ((Nat.div_mod_unique (d := q) (c := s) hk).mpr ⟨by omega, hs⟩).1
+
+/-- `x % k = s` from `x = k * q + s` with `s < k`. -/
+theorem mod_eq_of_decomp {k q s x : Nat} (hk : 0 < k) (hs : s < k) (hx : x = k * q + s) :
+    x % k = s :=
+  ((Nat.div_mod_unique (d := q) (c := s) hk).mpr ⟨by omega, hs⟩).2
+
+/-- `⌈a/k⌉·k` is below `a + k`. -/
+theorem ceilDiv_mul_lt (a k : Nat) (hk : 0 < k) : ceilDiv a k * k < a + k := by
+  unfold ceilDiv
+  have := Nat.div_mul_le_self (a + k - 1) k
+  omega
+
+/-- `⌈a/k⌉ = ⌊a/k⌋ + 1` when `k` does not divide `a`. -/
+theorem ceilDiv_of_mod_pos (a k : Nat) (hk : 0 < k) (h : 0 < a % k) :
+    ceilDiv a k = a / k + 1 := by
+  unfold ceilDiv
+  have e := Nat.div_add_mod a k
+  have hlt := Nat.mod_lt a hk
+  exact div_eq_of_decomp hk (s := a % k - 1) (by omega) (by rw [Nat.mul_add]; omega)
+
+-- Variable-form division (`k c`)
+
+/-- A term under variable-form division by `k`: positive literals round
+up, negated literals round down. -/
+def cgTerm (k : Nat) : Term → Term
+  | (a, .pos i) => (ceilDiv a k, .pos i)
+  | (a, .neg i) => (a / k, .neg i)
+
+/-- `Σ_neg (a mod k)` (CakePB `cg_offset`). -/
+def cgOffset (k : Nat) : List Term → Nat
+  | [] => 0
+  | (_, .pos _) :: rest => cgOffset k rest
+  | (a, .neg _) :: rest => a % k + cgOffset k rest
+
+/-- Variable-form division `k c` (CakePB `var_divide`): coefficients by
+`cgTerm`, zero terms dropped, degree `⌈(A − Σ_neg (a mod k))/k⌉`. -/
+def cgDivConstr (c : Constr) (k : Nat) : Constr :=
+  ⟨stripZero (c.terms.map (cgTerm k)), ceilDiv (c.degree - cgOffset k c.terms) k⟩
+
+theorem evalSum_cgTerm_ge (v : Valuation) (k : Nat) (hk : 0 < k) (ts : List Term) :
+    evalSum v ts ≤ k * evalSum v (ts.map (cgTerm k)) + cgOffset k ts := by
+  induction ts with
+  | nil => simp [evalSum, cgOffset]
+  | cons hd tl ih =>
+    obtain ⟨a, l⟩ := hd
+    cases l with
+    | pos i =>
+      simp only [List.map, cgTerm, evalSum, cgOffset]
+      have h1 : a * evalLit v (.pos i) ≤ k * (ceilDiv a k * evalLit v (.pos i)) := by
+        rcases evalLit_zero_or_one v (.pos i) with h | h
+        · simp [h]
+        · rw [h, Nat.mul_one, Nat.mul_one, Nat.mul_comm]; exact ceilDiv_mul_ge a k hk
+      rw [Nat.mul_add]; omega
+    | neg i =>
+      simp only [List.map, cgTerm, evalSum, cgOffset]
+      have h1 : a * evalLit v (.neg i) ≤ k * (a / k * evalLit v (.neg i)) + a % k := by
+        rcases evalLit_zero_or_one v (.neg i) with h | h
+        · simp [h]
+        · rw [h, Nat.mul_one, Nat.mul_one]; exact Nat.le_of_eq (Nat.div_add_mod a k).symm
+      rw [Nat.mul_add]; omega
+
+/-- **Variable-form division** (Chvátal–Gomory rounding of the variable
+form) preserves satisfaction. -/
+theorem cgDiv_sat (c : Constr) (k : Nat) (hk : 0 < k) (v : Valuation) (h : c.sat v) :
+    (cgDivConstr c k).sat v := by
+  simp only [cgDivConstr, Constr.sat, evalSum_stripZero] at *
+  have := evalSum_cgTerm_ge v k hk c.terms
+  exact ceilDiv_le_of_mul_le _ _ k hk (by omega)
+
+-- Mixed-integer rounding (`k n`, `k m`)
+
+/-- MIR rounding function `F(z) = ⌊z/k⌋·r + min(z mod k, r)`. -/
+def mirF (k r z : Nat) : Nat := z / k * r + min (z % k) r
+
+theorem mirF_decomp {k r q s : Nat} (hk : 0 < k) (hs : s < k) :
+    mirF k r (k * q + s) = q * r + min s r := by
+  unfold mirF
+  rw [div_eq_of_decomp hk hs rfl, mod_eq_of_decomp hk hs rfl]
+
+theorem mirF_zero (k r : Nat) : mirF k r 0 = 0 := by simp [mirF]
+
+/-- `F` is subadditive for `r < k`. -/
+theorem mirF_subadd {k r : Nat} (hk : 0 < k) (hr : r < k) (x y : Nat) :
+    mirF k r (x + y) ≤ mirF k r x + mirF k r y := by
+  have ex := Nat.div_add_mod x k
+  have ey := Nat.div_add_mod y k
+  have h1 := Nat.mod_lt x hk
+  have h2 := Nat.mod_lt y hk
+  have hx : mirF k r x = x / k * r + min (x % k) r := rfl
+  have hy : mirF k r y = y / k * r + min (y % k) r := rfl
+  rw [hx, hy]
+  by_cases hs : x % k + y % k < k
+  · have e : x + y = k * (x / k + y / k) + (x % k + y % k) := by rw [Nat.mul_add]; omega
+    rw [e, mirF_decomp hk hs, Nat.add_mul]; omega
+  · have e : x + y = k * (x / k + y / k + 1) + (x % k + y % k - k) := by
+      rw [Nat.mul_add, Nat.mul_add]; omega
+    rw [e, mirF_decomp hk (by omega), Nat.add_mul, Nat.add_mul]; omega
+
+/-- `F` is monotone. -/
+theorem mirF_mono {k r : Nat} {x y : Nat} (h : x ≤ y) :
+    mirF k r x ≤ mirF k r y := by
+  unfold mirF
+  have hq : x / k ≤ y / k := Nat.div_le_div_right h
+  rcases Nat.lt_or_eq_of_le hq with hlt | heq
+  · have := Nat.mul_le_mul_right r (Nat.succ_le_of_lt hlt)
+    rw [Nat.succ_mul] at this
+    omega
+  · have ex := Nat.div_add_mod x k
+    have ey := Nat.div_add_mod y k
+    rw [heq] at ex ⊢
+    have : x % k ≤ y % k := by omega
+    omega
+
+/-- `F(a·e) = F(a)·e` for a literal value `e`. -/
+theorem mirF_mul_evalLit (k r a : Nat) (v : Valuation) (l : Literal) :
+    mirF k r (a * evalLit v l) = mirF k r a * evalLit v l := by
+  rcases evalLit_zero_or_one v l with h | h
+  · simp [h, mirF_zero]
+  · simp [h]
+
+/-- A term under the normalized MIR cut with remainder `r`: `a ↦ F(a)`. -/
+def mirTerm (k r : Nat) : Term → Term
+  | (a, l) => (mirF k r a, l)
+
+/-- `Σ F(a_l)·l ≥ F(Σ a_l·l)` (subadditivity of `F` over the terms). -/
+theorem mirF_evalSum_le {k r : Nat} (hk : 0 < k) (hr : r < k) (v : Valuation)
+    (ts : List Term) :
+    mirF k r (evalSum v ts) ≤ evalSum v (ts.map (mirTerm k r)) := by
+  induction ts with
+  | nil => simp [evalSum, mirF_zero]
+  | cons hd tl ih =>
+    obtain ⟨a, l⟩ := hd
+    simp only [evalSum, List.map, mirTerm]
+    have := mirF_subadd hk hr (a * evalLit v l) (evalSum v tl)
+    rw [mirF_mul_evalLit] at this
+    omega
+
+/-- Normalized MIR cut `k n` (CakePB `mir`): with `r = A mod k`, each
+coefficient becomes `F(a)`, zero terms are dropped, the degree is
+`⌈A/k⌉·r` (all zero, i.e. `0 ≥ 0`, when `r = 0`). -/
+def mirConstr (c : Constr) (k : Nat) : Constr :=
+  let r := c.degree % k
+  ⟨stripZero (c.terms.map (mirTerm k r)), ceilDiv c.degree k * r⟩
+
+/-- `⌈A/k⌉·(A mod k) ≤ F(A)` for `r = A mod k` (in fact equal). -/
+theorem ceilDiv_mul_mod_le_mirF (A k : Nat) (hk : 0 < k) :
+    ceilDiv A k * (A % k) ≤ mirF k (A % k) A := by
+  by_cases h0 : A % k = 0
+  · rw [h0]; simp
+  · rw [ceilDiv_of_mod_pos A k hk (by omega)]
+    unfold mirF
+    rw [Nat.add_mul]; simp
+
+/-- **Normalized MIR cut** preserves satisfaction. -/
+theorem mir_sat (c : Constr) (k : Nat) (hk : 0 < k) (v : Valuation) (h : c.sat v) :
+    (mirConstr c k).sat v := by
+  simp only [mirConstr, Constr.sat, evalSum_stripZero] at *
+  have h1 := mirF_mono (k := k) (r := c.degree % k) h
+  have h2 := mirF_evalSum_le hk (Nat.mod_lt c.degree hk) v c.terms
+  have h3 := ceilDiv_mul_mod_le_mirF c.degree k hk
+  omega
+
+/-- Shift of a negated term, `e(a) = ⌈a/k⌉·k − a` (`(−a) mod k`). -/
+def mirShift (k a : Nat) : Nat := ceilDiv a k * k - a
+
+/-- A term under the variable-form MIR cut with remainder `r`: positive
+`a ↦ F(a)`, negated `a ↦ ⌈a/k⌉·r − min(e(a), r)` (CakePB `var_mir_coeff`,
+read in literal form). -/
+def mirVarTerm (k r : Nat) : Term → Term
+  | (a, .pos i) => (mirF k r a, .pos i)
+  | (a, .neg i) => (ceilDiv a k * r - min (mirShift k a) r, .neg i)
+
+/-- `Σ_neg e(a)`. -/
+def mirVarOffset (k : Nat) : List Term → Nat
+  | [] => 0
+  | (_, .pos _) :: rest => mirVarOffset k rest
+  | (a, .neg _) :: rest => mirShift k a + mirVarOffset k rest
+
+/-- `Σ_neg min(e(a), r)`. -/
+def mirVarMin (k r : Nat) : List Term → Nat
+  | [] => 0
+  | (_, .pos _) :: rest => mirVarMin k r rest
+  | (a, .neg _) :: rest => min (mirShift k a) r + mirVarMin k r rest
+
+/-- Variable-form MIR cut `k m` (CakePB `var_mir`). With the shifted degree
+`A + Σ_neg e(a) = B + Σ_neg ⌈a/k⌉·k` and `r = (A + Σ_neg e(a)) mod k`
+(`= B mod k`), coefficients by `mirVarTerm`, zero terms dropped, degree
+`F(A + Σ_neg e(a)) − Σ_neg min(e(a), r)`, which equals CakePB's
+`⌈B/k⌉·r + Σ_neg a'` truncated at `0`. -/
+def mirVarConstr (c : Constr) (k : Nat) : Constr :=
+  let d := c.degree + mirVarOffset k c.terms
+  let r := d % k
+  ⟨stripZero (c.terms.map (mirVarTerm k r)), mirF k r d - mirVarMin k r c.terms⟩
+
+theorem mirShift_lt (k a : Nat) (hk : 0 < k) : mirShift k a < k := by
+  unfold mirShift
+  have := ceilDiv_mul_lt a k hk
+  omega
+
+/-- The shifted value of a negated term: `F(a·e + e(a)) = a'·e + min(e(a), r)`. -/
+theorem mirF_neg_term {k r : Nat} (hk : 0 < k) (a : Nat) (v : Valuation) (l : Literal) :
+    mirF k r (a * evalLit v l + mirShift k a) =
+      (ceilDiv a k * r - min (mirShift k a) r) * evalLit v l + min (mirShift k a) r := by
+  have hlt := mirShift_lt k a hk
+  have hge := ceilDiv_mul_ge a k hk
+  rcases evalLit_zero_or_one v l with h | h
+  · rw [h, Nat.mul_zero, Nat.zero_add, Nat.mul_zero, Nat.zero_add]
+    have := mirF_decomp (r := r) (q := 0) hk hlt
+    rw [Nat.mul_zero, Nat.zero_add, Nat.zero_mul, Nat.zero_add] at this
+    exact this
+  · rw [h, Nat.mul_one, Nat.mul_one]
+    have e : a + mirShift k a = k * ceilDiv a k + 0 := by
+      unfold mirShift; rw [Nat.mul_comm k]; omega
+    rw [e, mirF_decomp hk hk, Nat.min_eq_left (Nat.zero_le r), Nat.add_zero]
+    have hle : min (mirShift k a) r ≤ ceilDiv a k * r := by
+      by_cases hm : ceilDiv a k = 0
+      · have : mirShift k a = 0 := by unfold mirShift; rw [hm]; simp
+        rw [this]; simp
+      · have := Nat.le_mul_of_pos_left r (Nat.pos_of_ne_zero hm)
+        omega
+    omega
+
+theorem mirF_varEvalSum_le {k r : Nat} (hk : 0 < k) (hr : r < k) (v : Valuation)
+    (ts : List Term) :
+    mirF k r (evalSum v ts + mirVarOffset k ts) ≤
+      evalSum v (ts.map (mirVarTerm k r)) + mirVarMin k r ts := by
+  induction ts with
+  | nil => simp [evalSum, mirVarOffset, mirVarMin, mirF_zero]
+  | cons hd tl ih =>
+    obtain ⟨a, l⟩ := hd
+    cases l with
+    | pos i =>
+      simp only [evalSum, List.map, mirVarTerm, mirVarOffset, mirVarMin]
+      have := mirF_subadd hk hr (a * evalLit v (.pos i)) (evalSum v tl + mirVarOffset k tl)
+      rw [mirF_mul_evalLit, ← Nat.add_assoc] at this
+      omega
+    | neg i =>
+      simp only [evalSum, List.map, mirVarTerm, mirVarOffset, mirVarMin]
+      have := mirF_subadd hk hr (a * evalLit v (.neg i) + mirShift k a)
+        (evalSum v tl + mirVarOffset k tl)
+      rw [mirF_neg_term hk] at this
+      have e : a * evalLit v (.neg i) + evalSum v tl + (mirShift k a + mirVarOffset k tl) =
+          a * evalLit v (.neg i) + mirShift k a + (evalSum v tl + mirVarOffset k tl) := by
+        omega
+      rw [e]
+      omega
+
+/-- **Variable-form MIR cut** preserves satisfaction. -/
+theorem mirVar_sat (c : Constr) (k : Nat) (hk : 0 < k) (v : Valuation) (h : c.sat v) :
+    (mirVarConstr c k).sat v := by
+  simp only [mirVarConstr, Constr.sat, evalSum_stripZero] at *
+  have hr := Nat.mod_lt (c.degree + mirVarOffset k c.terms) hk
+  have h1 := mirF_mono (k := k) (r := (c.degree + mirVarOffset k c.terms) % k)
+    (Nat.add_le_add_right h (mirVarOffset k c.terms))
+  have h2 := mirF_varEvalSum_le hk hr v c.terms
+  omega
+
 -- Negation (for RUP)
 
 /-- Total coefficient sum of a constraint (upper bound on evaluation). -/

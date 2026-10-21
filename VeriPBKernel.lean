@@ -17,3 +17,4 @@ import VeriPB.Tactic.Sat.Tests.Reflect
 import VeriPB.Tactic.Sat.Tests.Normalize
 import VeriPB.Tactic.Sat.Tests.Differential
 import VeriPB.Tactic.Sat.Tests.FastConstr
+import VeriPB.Tactic.Sat.Tests.ParseV3

@@ -755,16 +755,20 @@ elab "eq_coloring_reflect " nm:ident ppSpace
     let numVarsExpr := mkApp2
       (mkConst ``numVars) gVal kVal
     let proofStrExpr := mkStrLit proofStr
-    let checkExpr := mkApp3
+    let checkExpr := mkApp5
       (mkConst ``VeriPB.Reflect.checkProofBool)
-      constrsExpr numVarsExpr proofStrExpr
+      constrsExpr numVarsExpr
+      VeriPB.Reflect.emptyObjectiveExpr VeriPB.Reflect.emptyNamesExpr
+      proofStrExpr
     let hEqTrue ← match ← Lean.Meta.nativeEqTrue `eq_coloring_reflect checkExpr
         (axiomDeclRange? := (← getRef)) with
       | .success prf => pure prf
       | .notTrue => throwError "Reflection checker returned false for {name}"
-    let unsatProof := mkApp4
+    let unsatProof := mkApp6
       (mkConst ``VeriPB.Reflect.checkProof_sound)
-      constrsExpr numVarsExpr proofStrExpr hEqTrue
+      constrsExpr numVarsExpr
+      VeriPB.Reflect.emptyObjectiveExpr VeriPB.Reflect.emptyNamesExpr
+      proofStrExpr hEqTrue
     let finalProof := mkApp3
       (mkConst ``no_eq_coloring_of_unsat)
       gVal kVal unsatProof

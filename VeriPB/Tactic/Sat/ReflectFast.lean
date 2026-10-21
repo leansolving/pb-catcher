@@ -21,7 +21,7 @@ counterpart in `ReflectCheck.lean` step by step, including term order:
 normalization happens at the same points, produces the same term order
 (`VeriPB.normalizeArrays` is an exact simulation of `VeriPB.normalizeConstr`),
 weakening normalizes and then removes every term of the variable, and RUP
-combination picks the first complementary pair in accumulator order.
+propagation makes the same single pass over the same hint constraints.
 
 **Representation.** A constraint is stored as two parallel `Array Nat`
 fields: coefficients and literal codes (`2*v` for `x_v`, `2*v+1` for
@@ -62,9 +62,13 @@ structure FConstr where
 structure FBoolCheckState where
   db : Std.HashMap Nat FConstr
   origConstrs : Array Constr
+  objective : Objective
+  best : Option Nat
   nextId : Nat
   numVars : Nat
   formulaSize : Nat
+  coreIds : Std.HashSet Nat := {}
+  s2c : Bool := false
   deriving Inhabited
 
 /-- `true` iff the term list is a block: no zero coefficient, no repeated
@@ -122,11 +126,12 @@ def FConstr.negate (c : FConstr) : FConstr :=
   c.negateWith c.coeffSum
 
 /-- Second half of `rupNegateF` (mirrors `VeriPB.Reflect.rupNegate`) on an
-already normalized constraint: negate, or the trivial constraint when the
-target is contradictory on its own. -/
+already normalized constraint: negate, or the negated terms with degree `0`
+when the target is contradictory on its own. -/
 def rupNegateWith (nf : FConstr) : FConstr :=
   let cs := nf.coeffSum
-  if nf.degree ≤ cs then nf.negateWith cs else ⟨#[], #[], 0, 0⟩
+  if nf.degree ≤ cs then nf.negateWith cs
+  else ⟨nf.coeffs, nf.lits.map (· ^^^ 1), 0, nf.split⟩
 
 /-- Concatenation (mirrors `VeriPB.addConstrs`). Two blocks give a two-block
 constraint; anything else loses the structure. -/
@@ -178,6 +183,61 @@ def weakenFConstr (c : FConstr) (varIdx : Nat) : FConstr := Id.run do
       ls := ls.push c.lits[i]!
   let split := if c.split == 0 then 0 else c.split - removedBefore
   return ⟨cs, ls, c.degree - removed, split⟩
+
+/-- Rebuild a constraint from per-term coefficients `cs'` over the literals
+`c.lits`, dropping the zero coefficients (`Sat.PB.stripZero`). The literals
+of the kept terms are a subset of `c.lits`, so a block stays a block. -/
+def stripZeroF (c : FConstr) (cs' : Array Nat) (degree : Nat) : FConstr := Id.run do
+  let n := c.lits.size
+  let mut cs : Array Nat := Array.mkEmpty n
+  let mut ls : Array Nat := Array.mkEmpty n
+  for i in [:n] do
+    let a := cs'[i]!
+    if a != 0 then
+      cs := cs.push a
+      ls := ls.push c.lits[i]!
+  let split := if n != 0 && c.split == n then cs.size else 0
+  return ⟨cs, ls, degree, split⟩
+
+/-- Mirrors `Sat.PB.cgDivConstr` (`k c`). Literal code `2v+1` is negated. -/
+def cgDivFConstr (c : FConstr) (k : Nat) : FConstr := Id.run do
+  let n := c.lits.size
+  let mut cs : Array Nat := Array.mkEmpty n
+  let mut off := 0
+  for i in [:n] do
+    let a := c.coeffs[i]!
+    if c.lits[i]! % 2 == 1 then
+      cs := cs.push (a / k)
+      off := off + a % k
+    else
+      cs := cs.push (Sat.PB.ceilDiv a k)
+  return stripZeroF c cs (Sat.PB.ceilDiv (c.degree - off) k)
+
+/-- Mirrors `Sat.PB.mirConstr` (`k n`). -/
+def mirFConstr (c : FConstr) (k : Nat) : FConstr :=
+  let r := c.degree % k
+  stripZeroF c (c.coeffs.map (Sat.PB.mirF k r ·)) (Sat.PB.ceilDiv c.degree k * r)
+
+/-- Mirrors `Sat.PB.mirVarConstr` (`k m`). -/
+def mirVarFConstr (c : FConstr) (k : Nat) : FConstr := Id.run do
+  let n := c.lits.size
+  let mut off := 0
+  for i in [:n] do
+    if c.lits[i]! % 2 == 1 then
+      off := off + Sat.PB.mirShift k c.coeffs[i]!
+  let d := c.degree + off
+  let r := d % k
+  let mut cs : Array Nat := Array.mkEmpty n
+  let mut mins := 0
+  for i in [:n] do
+    let a := c.coeffs[i]!
+    if c.lits[i]! % 2 == 1 then
+      let m := min (Sat.PB.mirShift k a) r
+      cs := cs.push (Sat.PB.ceilDiv a k * r - m)
+      mins := mins + m
+    else
+      cs := cs.push (Sat.PB.mirF k r a)
+  return stripZeroF c cs (Sat.PB.mirF k r d - mins)
 
 /-- General exact normalization through `VeriPB.normalizeArraysCore`; the
 result is flagged as a block when the one-pass path completed. -/
@@ -303,6 +363,27 @@ def execFPolOne (db : Std.HashMap Nat FConstr)
         | none => none
       else none
     | _ => none
+  | .lowerRhs => match stack with
+    | .nat k :: .constr c :: rest =>
+      -- lowering the degree keeps the term structure (and the block flag)
+      let nc := normalizeFConstr c
+      some (.constr { nc with degree := nc.degree - k } :: rest)
+    | _ => none
+  | .divVar => match stack with
+    | .nat k :: .constr c :: rest =>
+      if k == 0 then none
+      else some (.constr (cgDivFConstr (normalizeFConstr c) k) :: rest)
+    | _ => none
+  | .mir => match stack with
+    | .nat k :: .constr c :: rest =>
+      if k == 0 then none
+      else some (.constr (mirFConstr (normalizeFConstr c) k) :: rest)
+    | _ => none
+  | .mirVar => match stack with
+    | .nat k :: .constr c :: rest =>
+      if k == 0 then none
+      else some (.constr (mirVarFConstr (normalizeFConstr c) k) :: rest)
+    | _ => none
 
 def execFPolOps (db : Std.HashMap Nat FConstr) :
     List VeriPB.PolOp → List FStackElem → Option (List FStackElem)
@@ -318,174 +399,322 @@ def execFPolRPNBool (ops : List VeriPB.PolOp)
   | some [.constr c] => some c
   | _ => none
 
-/-! ### RUP verification -/
+/-! ### RUP verification (unit propagation)
 
-/-- First complementary pair in accumulator order (mirrors `findCompLitPairBool`). -/
-def findFCompLitPairBool (acc hint : FConstr) :
-    Option (Nat × Nat) := Id.run do
-  for ia in [:acc.lits.size] do
-    let comp := acc.lits[ia]! ^^^ 1
-    for ih in [:hint.lits.size] do
-      if hint.lits[ih]! == comp then return some (acc.coeffs[ia]!, hint.coeffs[ih]!)
-  return none
+Mirrors `VeriPB.Reflect.verifyRupBool`: the same resolved hint list in the
+same order (no implicit `~`, all ids resolved first), the same assignment
+size `varBound hs`, ONE pass over the hints, the same slack, and within a
+constraint the same forced literals applied in term order. The accepted set
+equals the verified one by construction: both run the same single pass, so
+no confluence argument is needed. The assignment is a `ByteArray` indexed by
+variable (`0` unassigned, `1` true, `2` false), so a literal with code
+`2v + p` is true iff `asgn[v] = p + 1` and false iff `asgn[v] = 2 - p`.
 
-@[inline] def evalLitPartialF (asgn : Array (Option Bool)) (l : Nat) : Option Bool :=
-  let v := l / 2
-  if h : v < asgn.size then
-    if l % 2 == 0 then asgn[v] else asgn[v].map (!·)
-  else none
+Within one constraint the verified checker computes the forced literals
+(unassigned, coefficient above the slack) before assigning any of them and
+reports a conflict when a forced literal is already false at its turn. Here
+the second pass decides "unassigned at the start of this constraint" on the
+fly: the only variables that change during the pass are those it assigns
+(`setVars`), so a currently assigned literal was forced iff its variable is
+in `setVars`; a forced literal that is now false is a conflict, every other
+assigned literal is skipped, exactly as in `assignLits`. -/
 
-/-- Mirrors `pbPropagateBool`: `forced` lists the unassigned literals with
-coefficient above the slack, in reverse term order (as the verified version
-builds it). -/
-def pbFPropagateBool (asgn : Array (Option Bool)) (c : FConstr) :
-    PropResultBool := Id.run do
-  let mut totalActive : Nat := 0
-  for i in [:c.lits.size] do
-    match evalLitPartialF asgn c.lits[i]! with
-    | some false => pure ()
-    | _ => totalActive := totalActive + c.coeffs[i]!
-  if totalActive < c.degree then return .conflict
-  let slack := totalActive - c.degree
-  let mut forced : List (Sat.PB.Literal × Bool) := []
-  for i in [:c.lits.size] do
-    let a := c.coeffs[i]!
-    if a > slack then
+/-- `1 +` the largest variable of the constraints (`0` if none); mirrors
+`varBound`. -/
+def varBoundF (hs : Array FConstr) : Nat := Id.run do
+  let mut m := 0
+  for c in hs do
+    for l in c.lits do
+      if l / 2 + 1 > m then m := l / 2 + 1
+  return m
+
+/-- Value of variable `v` (`0` unassigned, also out of range). -/
+@[inline] def asgnGet (asgn : ByteArray) (v : Nat) : UInt8 :=
+  if h : v < asgn.size then asgn[v] else 0
+
+/-- One unit-propagation pass over `hs` in order from the empty assignment
+of `n` variables: `true` iff it reaches a conflict (mirrors
+`(propagateRound (Array.replicate n none) false hs).isNone`). -/
+def rupConflictF (hs : Array FConstr) (n : Nat) : Bool := Id.run do
+  let mut asgn : ByteArray := ByteArray.emptyWithCapacity n
+  for _ in [:n] do
+    asgn := asgn.push 0
+  for c in hs do
+    let k := c.lits.size
+    -- pass 1: active sum (literals not false) and the largest coefficient
+    -- of an unassigned literal
+    let mut act := 0
+    let mut maxUn := 0
+    for i in [:k] do
       let l := c.lits[i]!
-      if (evalLitPartialF asgn l).isNone then forced := (decLit l, true) :: forced
-  if forced.isEmpty then .noPropagation
-  else .propagated forced
+      let x := asgnGet asgn (l / 2)
+      let p := (l % 2).toUInt8
+      if x != 2 - p then
+        let a := c.coeffs[i]!
+        act := act + a
+        if x == 0 && a > maxUn then maxUn := a
+    if act < c.degree then return true
+    let slack := act - c.degree
+    if maxUn > slack then
+      -- pass 2: assign the forced literals in term order
+      let mut setVars : List Nat := []
+      for i in [:k] do
+        if c.coeffs[i]! > slack then
+          let l := c.lits[i]!
+          let v := l / 2
+          let p := (l % 2).toUInt8
+          let x := asgnGet asgn v
+          if x == 0 then
+            if v < asgn.size then asgn := asgn.set! v (p + 1)
+            setVars := v :: setVars
+          else if x == 2 - p && setVars.contains v then return true
+  return false
 
-/-- Mirrors `findConflictHintBool`; additionally returns the resolved hint
-constraints so that the caller need not look them up again. -/
-def findFConflictHintBool (negConstr : FConstr)
-    (hints : List VeriPB.RupHint) (db : Std.HashMap Nat FConstr)
-    (numVars : Nat) : Option (Nat × Array FConstr) := Id.run do
-  let mut hintArr : Array FConstr := Array.mkEmpty hints.length
+/-- Mirrors `resolveHints`: `none` if an id is not in the database. -/
+def rupFHintConstrs (negConstr : FConstr) (hints : List VeriPB.RupHint)
+    (db : Std.HashMap Nat FConstr) : Option (Array FConstr) := Id.run do
+  let mut arr : Array FConstr := Array.mkEmpty hints.length
   for h in hints do
     match h with
-    | .negC => hintArr := hintArr.push negConstr
+    | .negC => arr := arr.push negConstr
     | .id n => match db[n]? with
-      | some c => hintArr := hintArr.push c
+      | some c => arr := arr.push c
       | none => return none
-  let mut asgn : Array (Option Bool) := .replicate numVars none
-  let mut conflictIdx : Option Nat := none
-  let mut changed := true
-  let maxIters := propagationIterLimit numVars hintArr.size
-  let mut iters := 0
-  while changed && iters < maxIters do
-    iters := iters + 1
-    changed := false
-    for i in [:hintArr.size] do
-      if conflictIdx.isSome then break
-      let hintC := hintArr[i]!
-      match pbFPropagateBool asgn hintC with
-      | .conflict => conflictIdx := some i
-      | .propagated forced =>
-        changed := true
-        for (l, val) in forced do
-          if conflictIdx.isSome then break
-          let varIdx := l.var
-          let actualVal := match l with
-            | .pos _ => val
-            | .neg _ => !val
-          if varIdx < asgn.size then
-            match asgn[varIdx]! with
-            | some existing =>
-              if existing != actualVal then
-                conflictIdx := some i
-                break
-            | none => asgn := asgn.set! varIdx (some actualVal)
-      | .noPropagation => pure ()
-  return conflictIdx.map fun i => (i, hintArr)
+  return some arr
 
-def combineFHintsRec (acc : FConstr) : List FConstr → FConstr
-  | [] => acc
-  | hintC :: rest =>
-    if acc.isContra then acc
-    else
-      let combined := match findFCompLitPairBool acc hintC with
-        | some (ca, ch) =>
-          let accM := if ch == 1 then acc else mulFConstr acc ch
-          let hintM := if ca == 1 then hintC else mulFConstr hintC ca
-          normalizeFConstr (addFConstrs accM hintM)
-        | none =>
-          normalizeFConstr (addFConstrs acc hintC)
-      combineFHintsRec combined rest
-
-/-- Mirrors `verifyRupExtract`. The verified version resolves every hint a
-second time after finding the conflict; the resolved array returned by
-`findFConflictHintBool` holds the same constraints in the same order. -/
-def verifyFRupExtract (negConstr : FConstr)
-    (hints : List VeriPB.RupHint) (db : Std.HashMap Nat FConstr)
-    (numVars : Nat) : Option (FConstr × List FConstr) :=
-  if hints.isEmpty then none
-  else
-    match findFConflictHintBool negConstr hints db numVars with
-    | none => none
-    | some (conflictIdx, hintArr) =>
-      let conflictC := hintArr[conflictIdx]!
-      let otherHints := (List.range hintArr.size).filterMap fun i =>
-        if i == conflictIdx then none else some hintArr[i]!
-      some (conflictC, otherHints)
-
+/-- Mirrors `verifyRupBool` (`numVars` is unused). -/
 def verifyFRupBool (negConstr : FConstr)
     (hints : List VeriPB.RupHint) (db : Std.HashMap Nat FConstr)
-    (numVars : Nat) : Bool :=
-  match verifyFRupExtract negConstr (withNegHint hints) db numVars with
+    (_numVars : Nat) : Bool :=
+  match rupFHintConstrs negConstr hints db with
   | none => false
-  | some (conflictC, otherHints) =>
-    (combineFHintsRec (normalizeFConstr conflictC) otherHints).isContra
+  | some hs => rupConflictF hs (varBoundF hs)
 
 /-! ### Step execution -/
 
 def FBoolCheckState.fromConstrs (constrs : Array Constr)
-    (numVars : Nat) : FBoolCheckState :=
+    (numVars : Nat) (objective : Objective) : FBoolCheckState :=
   { db := constrs.foldl (fun (db, i) c =>
       (db.insert i (toFConstr c), i + 1)) ({}, 1) |>.1
     origConstrs := constrs
+    objective := objective
+    best := none
     nextId := constrs.size + 1
     numVars := numVars
-    formulaSize := constrs.size }
+    formulaSize := constrs.size
+    coreIds := (List.range constrs.size).foldl (fun s i => s.insert (i + 1)) {}
+    s2c := false }
 
-/-- Process red proof goals (mirrors `processRedGoalsBool`). -/
-def processFRedGoalsBool
-    (execFn : FBoolCheckState → List VeriPB.ProofStep → Option FBoolCheckState)
-    (origConstrs : Array Constr) (numVars formulaSize : Nat)
-    (subst : List (Nat × Sat.PB.SubstVal)) (pbConstr : Constr)
-    (savedDb redDb : Std.HashMap Nat FConstr)
-    (goals : List (String × Array VeriPB.ProofStep × Nat))
-    (nextId : Nat) : Option Nat :=
-  match goals with
-  | [] => some nextId
-  | (goalId, innerSteps, resultId) :: rest =>
-    let goalConstr? :=
-      if goalId.startsWith "#" then
-        some (toFConstr (Sat.PB.applySubstConstr subst pbConstr))
-      else match goalId.toNat? with
-      | some dbId => match savedDb[dbId]? with
-        | some c => some (toFConstr (Sat.PB.applySubstConstr subst (fromFConstr c)))
-        | none => none
-      | none => none
-    match goalConstr? with
+/-- Mirrors `allIds`. -/
+def allIdsF (db : Std.HashMap Nat FConstr) : Std.HashSet Nat :=
+  db.keys.foldl (fun s id => s.insert id) {}
+
+/-- Mirrors `allCore`. -/
+def allCoreF (s : FBoolCheckState) : Bool :=
+  s.db.keys.all fun id => s.coreIds.contains id
+
+/-- Mirrors `impliesSyntactic` on `fromFConstr S` and `fromFConstr T`: the
+target's literals are looked up in a hash map (first occurrence, as
+`coeffOf`), and the source's literals are checked for repetition with a hash
+set unless the source is flagged as a block (which has no repeated
+literal). -/
+def impliesSyntacticF (S T : FConstr) : Bool := Id.run do
+  let B := T.degree
+  if B == 0 then return true
+  if S.coeffSum < S.degree then return true
+  let mut tmap : Std.HashMap Nat Nat := {}
+  for i in [:T.lits.size] do
+    let l := T.lits[i]!
+    if !tmap.contains l then tmap := tmap.insert l T.coeffs[i]!
+  let isBlk := S.split != 0 && S.split == S.coeffs.size
+  let mut seen : Std.HashSet Nat := {}
+  let mut cost := 0
+  for i in [:S.lits.size] do
+    let l := S.lits[i]!
+    if !isBlk then
+      if seen.contains l then return false
+      seen := seen.insert l
+    let sc := S.coeffs[i]!
+    match tmap[l]? with
+    | none => cost := cost + sc
+    | some t => if t < sc && t < B then cost := cost + (sc - t)
+  return decide (B + cost ≤ S.degree)
+
+/-- Mirrors `checkSolution`: the same literal conversion, with the valuation
+`solValuation` stored as a `Bool` array (a variable is true iff its
+positive literal is listed; variables beyond the array are false). -/
+def checkSolutionF (F : Array Constr) (obj : Objective)
+    (lits : List VeriPB.OPBLit) : Option Nat :=
+  match lits.mapM VeriPB.opbLitToPB with
+  | .error _ => none
+  | .ok pl =>
+    let n := pl.foldl (fun m l => max m (l.var + 1)) 0
+    let asgn := pl.foldl (fun (a : Array Bool) l => match l with
+      | .pos i => a.set! i true
+      | .neg _ => a) (Array.replicate n false)
+    let val : Sat.PB.Literal → Nat := fun l => match l with
+      | .pos i => if asgn.getD i false then 1 else 0
+      | .neg i => if asgn.getD i false then 0 else 1
+    let evalS (ts : List Sat.PB.Term) : Nat :=
+      ts.foldl (fun acc (a, l) => acc + a * val l) 0
+    if F.all (fun c => decide (c.degree ≤ evalS c.terms)) then some (evalS obj)
+    else none
+
+/-- Mirrors `redGoalOf` (the goal database holds `FConstr`s). -/
+def redGoalOfF (subst : List (Nat × Sat.PB.SubstVal)) (C : Constr)
+    (obj : Objective) (goalDb : Std.HashMap Nat FConstr) (gid : String) :
+    Option Constr :=
+  if gid == "#1" then some (substGoal subst C)
+  else if gid == "#2" then
+    if obj.isEmpty then none else some (objGoalConstr subst obj)
+  else if gid.startsWith "#" then none
+  else match gid.toNat? with
+    | some n => (goalDb[n]?).map fun c => substGoal subst (fromFConstr c)
     | none => none
-    | some goalFc =>
-      if goalFc.degree > goalFc.coeffSum then none
-      else
-      let goalNeg := goalFc.negateWith goalFc.coeffSum
-      let goalDb := redDb.insert nextId goalNeg
-      let subState : FBoolCheckState :=
-        { db := goalDb, origConstrs, nextId := nextId + 1,
-          numVars, formulaSize }
-      match execFn subState innerSteps.toList with
-      | some finalSub =>
-        match finalSub.db[resultId]? with
-        | some c =>
-          if !c.isContra then none
-          else processFRedGoalsBool execFn origConstrs numVars formulaSize
-            subst pbConstr savedDb redDb rest finalSub.nextId
-        | none => none
+
+/-- Mirrors the database-goal part of `checkRedundance`
+(`goalDb.toList.all (dbGoalCovered ...)`): constraints whose touched literals
+are all set true are skipped on the array form; the rest are converted, and
+the normalized database for the "already in the database" test is built
+only when needed. -/
+def dbGoalsCoveredF (subst : List (Nat × Sat.PB.SubstVal)) (nC : Constr)
+    (goalDb : Std.HashMap Nat FConstr) (proved : List (String × Constr)) :
+    Bool := Id.run do
+  -- first binding wins, as `lookupSubst`
+  let substMap : Std.HashMap Nat Sat.PB.SubstVal :=
+    subst.foldl (fun m (v, sv) => if m.contains v then m else m.insert v sv) {}
+  let mut remaining : Array FConstr := #[]
+  for (_, c) in goalDb.toList do
+    let mut allTrue := true
+    for l in c.lits do
+      let ok := match substMap[l / 2]? with
+        | none => true
+        | some .one => l % 2 == 0
+        | some .zero => l % 2 == 1
+        | some _ => false
+      if !ok then
+        allTrue := false
+        break
+    if !allTrue then remaining := remaining.push c
+  if remaining.isEmpty then return true
+  let normDb : List Constr := goalDb.toList.map fun (_, c) =>
+    fromFConstr (normalizeFConstr c)
+  for c in remaining do
+    let D := fromFConstr c
+    let G := substGoal subst D
+    let ok := trivialByPair G ||
+      impliesSyntactic (VeriPB.normalizeConstr D) G ||
+       impliesSyntactic nC G ||
+      proved.any (fun p => !p.1.startsWith "#" && constrMatchNorm G p.2) ||
+      (let nG := VeriPB.normalizeConstr G
+       normDb.any fun d => constrMatchNorm nG d)
+    if !ok then return false
+  return true
+
+/-- Mirrors `processRedItems`. -/
+def processFRedItems
+    (execFn : FBoolCheckState → List VeriPB.ProofStep → Option FBoolCheckState)
+    (goalOf : String → Option Constr) :
+    FBoolCheckState → List VeriPB.ProofStep → List (String × Constr) →
+      Option (FBoolCheckState × List (String × Constr))
+  | st, [], proved => some (st, proved)
+  | st, item :: rest, proved =>
+    match item with
+    | .proofgoal gid steps (some h) =>
+      if steps.any innerStepForbidden then none else
+      match goalOf gid with
       | none => none
+      | some G =>
+        let sub := { st with
+          db := st.db.insert st.nextId (toFConstr (negTriv G))
+          nextId := st.nextId + 1 }
+        match execFn sub steps.toList with
+        | none => none
+        | some fin =>
+          match fin.db[h]? with
+          | some c =>
+            if c.isContra then
+              processFRedItems execFn goalOf { st with nextId := fin.nextId } rest
+                ((gid, G) :: proved)
+            else none
+          | none => none
+    | _ =>
+      if isLStep item then
+        match execFn st [item] with
+        | some st' => processFRedItems execFn goalOf st' rest proved
+        | none => none
+      else none
+
+/-- Mirrors `checkRedundance`. -/
+def checkFRedundance
+    (execFn : FBoolCheckState → List VeriPB.ProofStep → Option FBoolCheckState)
+    (st0 : FBoolCheckState) (goalDb : Std.HashMap Nat FConstr)
+    (subst : List (Nat × Sat.PB.SubstVal)) (C : Constr)
+    (items : List VeriPB.ProofStep) (qedHint : Option Nat) : Option Nat :=
+  let nC := rupNegate C
+  let st1 := { st0 with
+    db := st0.db.insert st0.nextId (rupNegateF (toFConstr C))
+    nextId := st0.nextId + 1 }
+  match processFRedItems execFn (redGoalOfF subst C st0.objective goalDb) st1
+      items [] with
+  | none => none
+  | some (fin, proved) =>
+    let ok := match qedHint with
+      | some cid => match fin.db[cid]? with
+        | some c => c.isContra
+        | none => false
+      | none =>
+        hashGoalsCovered subst C nC st0.objective proved &&
+        dbGoalsCoveredF subst nC goalDb proved
+    if ok then some fin.nextId else none
+
+/-- Mirrors `redStep`. -/
+def redFStep
+    (execFn : FBoolCheckState → List VeriPB.ProofStep → Option FBoolCheckState)
+    (state : FBoolCheckState) (constr : VeriPB.OPBConstr)
+    (substPairs : List (String × String)) (items : List VeriPB.ProofStep)
+    (qedHint : Option Nat) : Option FBoolCheckState :=
+  match VeriPB.opbConstrToPB constr with
+  | .error _ => none
+  | .ok C =>
+    match VeriPB.parseSubstPairs substPairs state.numVars with
+    | .error _ => none
+    | .ok subst =>
+      match checkFRedundance execFn state state.db subst C items qedHint with
+      | none => none
+      | some fid =>
+        some { state with
+          db := state.db.insert fid (normalizeFConstr (toFConstr C))
+          nextId := fid + 1
+          coreIds := if state.s2c then state.coreIds.insert fid else state.coreIds }
+
+/-- Mirrors `delcCheckedStep`. -/
+def delcCheckedFStep
+    (execFn : FBoolCheckState → List VeriPB.ProofStep → Option FBoolCheckState)
+    (state : FBoolCheckState) (ids : List Nat)
+    (substPairs : List (String × String))
+    (sub : Option (Array VeriPB.ProofStep × Option Nat)) :
+    Option FBoolCheckState :=
+  match ids, sub with
+  | [did], some (items, qedHint) =>
+    match VeriPB.parseSubstPairs substPairs state.numVars with
+    | .error _ => none
+    | .ok subst =>
+      if state.s2c && qedHint.isNone then none
+      else if !state.coreIds.contains did then none
+      else match state.db[did]? with
+        | none => none
+        | some D =>
+          let rest := state.db.erase did
+          let core' := state.coreIds.erase did
+          let coreDb := rest.filter fun id _ => core'.contains id
+          match checkFRedundance execFn
+              { state with db := coreDb, coreIds := core' } coreDb subst
+              (fromFConstr D) items.toList qedHint with
+          | none => none
+          | some fid =>
+            some { state with db := rest, coreIds := core', nextId := fid }
+  | _, _ => none
 
 def execFStepsFuel (fuel : Nat) (state : FBoolCheckState)
     (steps : List VeriPB.ProofStep) : Option FBoolCheckState :=
@@ -514,9 +743,7 @@ def execFStepsFuel (fuel : Nat) (state : FBoolCheckState)
             some { state with db := newDb, nextId := state.nextId + 1 }
         | .error _ => none
       | .pbc constr innerSteps resultId =>
-        if innerSteps.any (fun s => match s with
-            | .conclusion _ | .output => true | _ => false) then
-          none
+        if innerSteps.any innerStepForbidden then none
         else match fuel with
         | 0 => none
         | n + 1 =>
@@ -545,52 +772,86 @@ def execFStepsFuel (fuel : Nat) (state : FBoolCheckState)
                 | none => none
               | none => none
           | .error _ => none
+      | .ia constr premise =>
+        match premise with
+        | none => none
+        | some pid =>
+          match state.db[pid]? with
+          | none => none
+          | some S =>
+            match VeriPB.opbConstrToPB constr with
+            | .error _ => none
+            | .ok T0 =>
+              let T := normalizeFConstr (toFConstr T0)
+              if impliesSyntacticF (normalizeFConstr S) T then
+                some { state with
+                  db := state.db.insert state.nextId T
+                  nextId := state.nextId + 1 }
+              else none
       | .red constr substPairs goals =>
         match fuel with
         | 0 => none
         | n + 1 =>
-          match VeriPB.opbConstrToPB constr with
-          | .ok pbConstr =>
-            let fc := toFConstr pbConstr
-            let cs := fc.coeffSum
-            if fc.degree > cs then none
-            else
-              match VeriPB.parseSubstPairs substPairs state.numVars with
-              | .error _ => none
-              | .ok subst =>
-                let savedDb := state.db
-                let negId := state.nextId
-                let redDb := state.db.insert negId (fc.negateWith cs)
-                -- Coverage check needs Constr db, convert from FConstr
-                let constrDb := savedDb.fold (fun (m : Std.HashMap Nat Constr) k v =>
-                  m.insert k (fromFConstr v)) {}
-                if !checkRedCoverage state.origConstrs subst constrDb
-                    goals.toList then none
-                else
-                match processFRedGoalsBool (execFStepsFuel n)
-                    state.origConstrs state.numVars state.formulaSize
-                    subst pbConstr savedDb redDb goals.toList
-                    (negId + 1) with
-                | some finalNextId =>
-                  let restoredDb := savedDb.insert finalNextId
-                    (normalizeFConstr fc)
-                  some { state with
-                    db := restoredDb
-                    nextId := finalNextId + 1 }
-                | none => none
-          | .error _ => none
-      | .deld ids | .delc ids =>
-        some { state with
-          db := ids.foldl (fun db id => db.erase id) state.db }
+          redFStep (execFStepsFuel n) state constr substPairs (goalsToItems goals) none
+      | .strengthening rule constr substPairs items qedHint =>
+        match rule with
+        | .dom => none
+        | .red =>
+          match fuel with
+          | 0 => none
+          | n + 1 =>
+            redFStep (execFStepsFuel n) state constr substPairs items.toList qedHint
+      | .delcChecked ids substPairs sub =>
+        match fuel with
+        | 0 => none
+        | n + 1 => delcCheckedFStep (execFStepsFuel n) state ids substPairs sub
+      | .deld ids =>
+        if ids.any state.coreIds.contains then none
+        else some { state with
+          db := ids.foldl (fun db id => db.erase id) state.db
+          coreIds := ids.foldl (fun s id => s.erase id) state.coreIds }
+      | .delc ids =>
+        if state.s2c && !allCoreF state then none
+        else some { state with
+          db := ids.foldl (fun db id => db.erase id) state.db
+          coreIds := ids.foldl (fun s id => s.erase id) state.coreIds }
+      | .core ids =>
+        if ids.all state.db.contains then
+          some { state with coreIds := ids.foldl (fun s id => s.insert id) state.coreIds }
+        else none
+      | .coreRange lo hi =>
+        let core' := state.db.keys.foldl
+          (fun s id => if lo ≤ id ∧ id < hi then s.insert id else s) state.coreIds
+        some { state with coreIds := core' }
+      | .strengtheningToCore on =>
+        if on then some { state with coreIds := allIdsF state.db, s2c := true }
+        else some { state with s2c := false }
+      | .loadOrder (some _) _ => none
+      | .loadOrder none _ => some state
+      | .defOrder _ => some state
+      | .conclusionNone => some state
       | .output => some state
       | .conclusion id =>
         match state.db[id]? with
         | some c => if c.isContra then some state else none
         | none => none
-      | .sol _ => some state
-      | .soli _ => some state
+      | .sol lits _ =>
+        match checkSolutionF state.origConstrs state.objective lits with
+        | none => none
+        | some b' => some { state with best := updBest state.best b' }
+      | .soli lits _ =>
+        match checkSolutionF state.origConstrs state.objective lits with
+        | none => none
+        | some b' =>
+          some { state with
+            db := state.db.insert state.nextId
+              (toFConstr (improveConstr state.objective b'))
+            nextId := state.nextId + 1
+            best := updBest state.best b'
+            coreIds := state.coreIds.insert state.nextId }
       | .conclusionSat _ => some state
       | .conclusionBounds _ _ _ _ => some state
+      | _ => none  -- statements the checker does not support yet
     match stepResult with
     | some s => execFStepsFuel fuel s rest
     | none => none
@@ -598,7 +859,7 @@ termination_by (fuel, steps.length)
 
 def hasFUnsatConclusion (steps : Array VeriPB.ProofStep)
     (state : FBoolCheckState) : Bool :=
-  steps.any fun step => match step with
+  state.best.isNone && steps.any fun step => match step with
     | .conclusion id => match state.db[id]? with
       | some c => c.isContra
       | none => false
@@ -606,11 +867,14 @@ def hasFUnsatConclusion (steps : Array VeriPB.ProofStep)
 
 /-- Runtime implementation of `VeriPB.Reflect.checkProofBool`. -/
 def checkProofBoolFast (constrs : Array Constr) (numVars : Nat)
+    (objective : Objective) (names : List (String × Nat))
     (proofStr : String) : Bool :=
-  match VeriPB.parseVeriPBProof proofStr with
+  match VeriPB.parseVeriPBProofWith (VeriPB.VarTable.ofList names numVars)
+      proofStr with
   | .error _ => false
   | .ok proofData =>
-    let initState := FBoolCheckState.fromConstrs constrs numVars
+    let initState := FBoolCheckState.fromConstrs constrs
+      (max numVars proofData.numVars) objective
     let stepsList := proofData.steps.toList
     let fuel := pbcDepth stepsList + 1
     match execFStepsFuel fuel initState stepsList with

@@ -402,16 +402,20 @@ elab "independent_set_reflect " n:ident ppSpace gExpr:term:max
     let numVarsExpr := mkApp (mkConst ``Graph.numVerts) gVal
     let proofStrExpr := mkStrLit proofStr
     -- checkProofBool (encode g target) numVerts proofStr
-    let checkExpr := mkApp3 (mkConst ``VeriPB.Reflect.checkProofBool)
-      constrsExpr numVarsExpr proofStrExpr
+    let checkExpr := mkApp5 (mkConst ``VeriPB.Reflect.checkProofBool)
+      constrsExpr numVarsExpr
+      VeriPB.Reflect.emptyObjectiveExpr VeriPB.Reflect.emptyNamesExpr
+      proofStrExpr
     let hEqTrue ← match ← Lean.Meta.nativeEqTrue `independent_set_reflect checkExpr
         (axiomDeclRange? := (← getRef)) with
       | .success prf => pure prf
       | .notTrue => throwError "Reflection checker returned false for {name}"
     -- checkProof_sound → formulaUnsat (encode g target)
-    let unsatProof := mkApp4
+    let unsatProof := mkApp6
       (mkConst ``VeriPB.Reflect.checkProof_sound)
-      constrsExpr numVarsExpr proofStrExpr hEqTrue
+      constrsExpr numVarsExpr
+      VeriPB.Reflect.emptyObjectiveExpr VeriPB.Reflect.emptyNamesExpr
+      proofStrExpr hEqTrue
     -- no_large_indset_of_unsat → ¬hasIndependentSet g target
     let finalProof := mkApp3 (mkConst ``no_large_indset_of_unsat)
       gVal targetVal unsatProof

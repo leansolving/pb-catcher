@@ -33,7 +33,7 @@ def timeOne (p : Nat) : IO Unit := do
     | .ok r => pure r
     | .error e => throw (IO.userError e)
   let t0 ← IO.monoMsNow
-  let ok ← force (VeriPB.Reflect.checkProofBool constrs numVars proofStr)
+  let ok ← force (VeriPB.Reflect.checkProofBool constrs numVars [] [] proofStr)
   let t1 ← IO.monoMsNow
   let n ← forceN (match VeriPB.parseVeriPBProof proofStr with
     | .ok d => d.steps.size | .error _ => 0)

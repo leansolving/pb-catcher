@@ -1,0 +1,10 @@
+pseudo-Boolean proof version 3.0
+f 4 ;
+red 1 x5 >= 1 : x5 -> 1 x1 -> x4 x2 -> x4 : subproof
+	proofgoal 1
+		pol 3 4 + 6 + ;
+	qed : 7 ;
+qed ;
+output NONE ;
+conclusion NONE ;
+end pseudo-Boolean proof ;

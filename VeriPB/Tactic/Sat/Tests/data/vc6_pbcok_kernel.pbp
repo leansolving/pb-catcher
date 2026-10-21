@@ -1,0 +1,8 @@
+pseudo-Boolean proof version 3.0
+f 8;
+pbc 1 x1 1 x2 >= 1 : subproof
+pol 9 1 +;
+qed : 10;
+soli ~x1 x2 ~x3 x4 ~x5 x6;
+output NONE ;
+end pseudo-Boolean proof;

@@ -15,7 +15,7 @@ Three-layer design mirroring LRAT:
 |-------|------|-------------|
 | Kernel | `VeriPB/Tactic/Sat/PseudoBoolean.lean` | PB constraint types, evaluation, soundness lemmas |
 | Metaprogram | `VeriPB/Tactic/Sat/FromVeriPB.lean` | Parser, normalization, `Expr`-level proof construction |
-| Reflection | `VeriPB/Tactic/Sat/ReflectCheck.lean` | Verified checker definitions (pol, RUP, red coverage) |
+| Reflection | `VeriPB/Tactic/Sat/ReflectCheck.lean` | Verified checker definitions (pol, RUP, redundance goals) |
 | Reflection | `VeriPB/Tactic/Sat/ReflectFast.lean` | Runtime implementation of the checker (`@[implemented_by]`) |
 | Reflection | `VeriPB/Tactic/Sat/Reflect.lean` | `checkProofBool`, soundness proof, `veripb_reflect`, `mkFormulaUnsatProof` |
 
@@ -25,9 +25,11 @@ Downstream projects that produce `formulaUnsat` theorems from their own encoding
 
 ## Supported VeriPB rules
 
-`pol` (polynomial arithmetic, including `x w` weakening), `rup` (reverse unit propagation), `pbc`/`subproof`/`qed` (proof by contradiction), `red`/`dom` (redundance and dominance-based strengthening), `deld`/`delc` (deletion), `sol`/`soli` (solution), `f` (formula size), `output`, `conclusion UNSAT/SAT/BOUNDS`.
+`pol` (polynomial arithmetic: `+`, `*`, `d`, `s`, `w` weakening, `-`, `c` division in variable form, `n`/`m` mixed-integer rounding), `rup` (reverse unit propagation), `ia` (implication), `pbc`/`subproof`/`qed` (proof by contradiction), `red` (redundance-based strengthening with explicit subproofs and proof goals), `deld`/`delc` (deletion, including checked core deletion `delc id : witness : subproof`), `core`, `strengthening_to_core`, `sol`/`soli` (solution logging), `f` (formula size), `output NONE`, `conclusion UNSAT/SAT/BOUNDS/NONE`. Parsed but rejected by the checker until implemented: `dom` with `def_order`/`load_order`/`scope`, `obji`/`eobj`/`obju`, and `output DERIVABLE/EQUISATISFIABLE/EQUIOPTIMAL`.
 
-Known completeness gaps relative to VeriPB's checker (PBLean rejects, VeriPB accepts; never the other way round): input constraints are used as written rather than normalized, so RUP propagation over an input constraint with a repeated variable is weaker; `rup C` with an empty hint list propagates only over the negation of `C`, not over the whole database; a `pol` intermediate whose degree would become negative is truncated to 0 (VeriPB keeps the negative degree), which can make a later derivation from it weaker; and `rup` certifies the conflict by scaled addition of the hints (one complementary pair cancelled per hint) after locating the conflicting hint by propagation, which can miss a conflict that VeriPB's unit propagation finds when several weighted literals are propagated at once. Proofs elaborated by VeriPB from RoundingSat logs do not hit these cases.
+Known differences to VeriPB 3 and CakePB. PBLean rejects some proofs that VeriPB and CakePB accept: input constraints are used as written, not normalized; all `rup` hint ids are resolved before propagation, so an unknown id after the conflicting hint rejects the step; under strengthening-to-core, `red` database goals range over the whole database, while CakePB checks the core only (2 proofs of the VeriPB test suite); dominance and orders, `obji`/`eobj`/`obju`, output claims and scopes are not supported. PBLean accepts some proofs that VeriPB rejects, without losing soundness: a negative degree is clamped to 0, which gives a stronger constraint; the `: value` field of `sol`/`soli` is ignored; and checked deletion under strengthening-to-core does not require an empty witness (CakePB accepts this too).
+
+In `veripb_reflect`, `rup C : hints` is checked by verified PB unit propagation as CakePB checks it: one pass over the hints in order, the negated target through an explicit `~`. The Expr-level `veripb_proof` path keeps its addition-based certificate.
 
 ## Application modules
 

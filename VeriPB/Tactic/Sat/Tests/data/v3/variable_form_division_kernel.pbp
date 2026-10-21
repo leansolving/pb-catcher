@@ -1,0 +1,9 @@
+pseudo-Boolean proof version 3.0
+f 4;
+pol 1 3 c;
+pol 3 2 c;
+pol 4 2 c;
+pol 2 5 +;
+output NONE ;
+conclusion UNSAT : 8;
+end pseudo-Boolean proof;

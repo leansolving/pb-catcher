@@ -368,15 +368,19 @@ elab "binpack_reflect " nm:ident ppSpace instTerm:term:max ppSpace proofFile:str
     let proofStr ← IO.FS.readFile (System.FilePath.mk proofPath)
     let constrsExpr := mkApp (mkConst ``encode) instExpr
     let proofStrExpr := mkStrLit proofStr
-    let checkExpr := mkApp3 (mkConst ``VeriPB.Reflect.checkProofBool)
-      constrsExpr numVarsExpr proofStrExpr
+    let checkExpr := mkApp5 (mkConst ``VeriPB.Reflect.checkProofBool)
+      constrsExpr numVarsExpr
+      VeriPB.Reflect.emptyObjectiveExpr VeriPB.Reflect.emptyNamesExpr
+      proofStrExpr
     let hEqTrue ← match ← Lean.Meta.nativeEqTrue `binpack_reflect checkExpr
         (axiomDeclRange? := (← getRef)) with
       | .success prf => pure prf
       | .notTrue => throwError "Reflection checker returned false for {name}"
-    let unsatProof := mkApp4
+    let unsatProof := mkApp6
       (mkConst ``VeriPB.Reflect.checkProof_sound)
-      constrsExpr numVarsExpr proofStrExpr hEqTrue
+      constrsExpr numVarsExpr
+      VeriPB.Reflect.emptyObjectiveExpr VeriPB.Reflect.emptyNamesExpr
+      proofStrExpr hEqTrue
     -- Build side-condition proofs via mkDecideProof
     if numBins == 0 then throwError "numBins must be positive"
     let hmType := mkApp4 (mkConst ``LT.lt [.zero])

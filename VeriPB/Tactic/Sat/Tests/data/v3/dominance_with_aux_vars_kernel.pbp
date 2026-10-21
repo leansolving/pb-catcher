@@ -1,0 +1,387 @@
+pseudo-Boolean proof version 3.0
+f 11;
+def_order lex10
+	vars
+		left u1 u2 u3 u4 u5 u6 u7 u8 u9 u10;
+		right v1 v2 v3 v4 v5 v6 v7 v8 v9 v10;
+		aux $a1 $a2 $a3 $a4 $a5 $a6 $a7 $a8 $a9 $d1 $d2 $d3 $d4 $d5 $d6 $d7 $d8 $d9 $d10;
+	end;
+spec
+red 1 u1 1 ~v1 1 ~$a1 >= 1 : $a1 -> 0 : subproof
+qed;
+red 1 ~u1 1 v1 2 $a1 >= 2 : $a1 -> 1 : subproof
+qed;
+red 1 u2 1 ~v2 2 $a1 3 ~$a2 >= 3 : $a2 -> 0 : subproof
+qed;
+red 1 ~u2 1 v2 2 ~$a1 2 $a2 >= 2 : $a2 -> 1 : subproof
+qed;
+red 1 u3 1 ~v3 2 $a2 3 ~$a3 >= 3 : $a3 -> 0 : subproof
+qed;
+red 1 ~u3 1 v3 2 ~$a2 2 $a3 >= 2 : $a3 -> 1 : subproof
+qed;
+red 1 u4 1 ~v4 2 $a3 3 ~$a4 >= 3 : $a4 -> 0 : subproof
+qed;
+red 1 ~u4 1 v4 2 ~$a3 2 $a4 >= 2 : $a4 -> 1 : subproof
+qed;
+red 1 u5 1 ~v5 2 $a4 3 ~$a5 >= 3 : $a5 -> 0 : subproof
+qed;
+red 1 ~u5 1 v5 2 ~$a4 2 $a5 >= 2 : $a5 -> 1 : subproof
+qed;
+red 1 u6 1 ~v6 2 $a5 3 ~$a6 >= 3 : $a6 -> 0 : subproof
+qed;
+red 1 ~u6 1 v6 2 ~$a5 2 $a6 >= 2 : $a6 -> 1 : subproof
+qed;
+red 1 u7 1 ~v7 2 $a6 3 ~$a7 >= 3 : $a7 -> 0 : subproof
+qed;
+red 1 ~u7 1 v7 2 ~$a6 2 $a7 >= 2 : $a7 -> 1 : subproof
+qed;
+red 1 u8 1 ~v8 2 $a7 3 ~$a8 >= 3 : $a8 -> 0 : subproof
+qed;
+red 1 ~u8 1 v8 2 ~$a7 2 $a8 >= 2 : $a8 -> 1 : subproof
+qed;
+red 1 u9 1 ~v9 2 $a8 3 ~$a9 >= 3 : $a9 -> 0 : subproof
+qed;
+red 1 ~u9 1 v9 2 ~$a8 2 $a9 >= 2 : $a9 -> 1 : subproof
+qed;
+red 1 ~u1 1 v1 1 ~$d1 >= 1 : $d1 -> 0 : subproof
+qed;
+red 1 u1 1 ~v1 2 $d1 >= 2 : $d1 -> 1 : subproof
+qed;
+red 1 ~u2 1 v2 1 ~$a1 3 $d1 4 ~$d2 >= 4 : $d2 -> 0 : subproof
+qed;
+red 1 u2 1 ~v2 1 $a1 3 ~$d1 3 $d2 >= 3 : $d2 -> 1 : subproof
+qed;
+red 1 ~u3 1 v3 1 ~$a2 3 $d2 4 ~$d3 >= 4 : $d3 -> 0 : subproof
+qed;
+red 1 u3 1 ~v3 1 $a2 3 ~$d2 3 $d3 >= 3 : $d3 -> 1 : subproof
+qed;
+red 1 ~u4 1 v4 1 ~$a3 3 $d3 4 ~$d4 >= 4 : $d4 -> 0 : subproof
+qed;
+red 1 u4 1 ~v4 1 $a3 3 ~$d3 3 $d4 >= 3 : $d4 -> 1 : subproof
+qed;
+red 1 ~u5 1 v5 1 ~$a4 3 $d4 4 ~$d5 >= 4 : $d5 -> 0 : subproof
+qed;
+red 1 u5 1 ~v5 1 $a4 3 ~$d4 3 $d5 >= 3 : $d5 -> 1 : subproof
+qed;
+red 1 ~u6 1 v6 1 ~$a5 3 $d5 4 ~$d6 >= 4 : $d6 -> 0 : subproof
+qed;
+red 1 u6 1 ~v6 1 $a5 3 ~$d5 3 $d6 >= 3 : $d6 -> 1 : subproof
+qed;
+red 1 ~u7 1 v7 1 ~$a6 3 $d6 4 ~$d7 >= 4 : $d7 -> 0 : subproof
+qed;
+red 1 u7 1 ~v7 1 $a6 3 ~$d6 3 $d7 >= 3 : $d7 -> 1 : subproof
+qed;
+red 1 ~u8 1 v8 1 ~$a7 3 $d7 4 ~$d8 >= 4 : $d8 -> 0 : subproof
+qed;
+red 1 u8 1 ~v8 1 $a7 3 ~$d7 3 $d8 >= 3 : $d8 -> 1 : subproof
+qed;
+red 1 ~u9 1 v9 1 ~$a8 3 $d8 4 ~$d9 >= 4 : $d9 -> 0 : subproof
+qed;
+red 1 u9 1 ~v9 1 $a8 3 ~$d8 3 $d9 >= 3 : $d9 -> 1 : subproof
+qed;
+red 1 ~u10 1 v10 1 ~$a9 3 $d9 4 ~$d10 >= 4 : $d10 -> 0 : subproof
+qed;
+red 1 u10 1 ~v10 1 $a9 3 ~$d9 3 $d10 >= 3 : $d10 -> 1 : subproof
+qed;
+	end;
+	def
+		1 $d10 >= 1;
+	end;
+	transitivity
+	vars
+		fresh_right w1 w2 w3 w4 w5 w6 w7 w8 w9 w10;
+		fresh_aux_1 $b1 $b2 $b3 $b4 $b5 $b6 $b7 $b8 $b9 $e1 $e2 $e3 $e4 $e5 $e6 $e7 $e8 $e9 $e10;
+		fresh_aux_2 $c1 $c2 $c3 $c4 $c5 $c6 $c7 $c8 $c9 $f1 $f2 $f3 $f4 $f5 $f6 $f7 $f8 $f9 $f10;
+	end;
+	proof
+	proofgoal #1
+pol 115 4 * 37 +;
+rup 1 $d9 >= 1 : 118 ~;
+pol 118 $d9 w;
+pol 119 4 * 35 +;
+rup 1 $d8 >= 1 : 118 35 ~;
+pol 121 $d8 w;
+pol 122 4 * 33 +;
+rup 1 $d7 >= 1 : 118 35 33 ~;
+pol 124 $d7 w;
+pol 125 4 * 31 +;
+rup 1 $d6 >= 1 : 118 35 33 31 ~;
+pol 127 $d6 w;
+pol 128 4 * 29 +;
+rup 1 $d5 >= 1 : 118 35 33 31 29 ~;
+pol 130 $d5 w;
+pol 131 4 * 27 +;
+rup 1 $d4 >= 1 : 118 35 33 31 29 27 ~;
+pol 133 $d4 w;
+pol 134 4 * 25 +;
+rup 1 $d3 >= 1 : 118 35 33 31 29 27 25 ~;
+pol 136 $d3 w;
+pol 137 4 * 23 +;
+rup 1 $d2 >= 1 : 118 35 33 31 29 27 25 23 ~;
+pol 139 $d2 w;
+pol 140 4 * 21 +;
+rup 1 $d1 >= 1 : 118 35 33 31 29 27 25 23 21 ~;
+pol 142 $d1 w;
+pol 143 19 +;
+pol 116 4 * 75 +;
+rup 1 $e9 >= 1 : 116 75 ~;
+pol 146 $e9 w;
+pol 147 4 * 73 +;
+rup 1 $e8 >= 1 : 116 75 73 ~;
+pol 149 $e8 w;
+pol 150 4 * 71 +;
+rup 1 $e7 >= 1 : 116 75 73 71 ~;
+pol 152 $e7 w;
+pol 153 4 * 69 +;
+rup 1 $e6 >= 1 : 116 75 73 71 69 ~;
+pol 155 $e6 w;
+pol 156 4 * 67 +;
+rup 1 $e5 >= 1 : 116 75 73 71 69 67 ~;
+pol 158 $e5 w;
+pol 159 4 * 65 +;
+rup 1 $e4 >= 1 : 116 75 73 71 69 67 65 ~;
+pol 161 $e4 w;
+pol 162 4 * 63 +;
+rup 1 $e3 >= 1 : 116 75 73 71 69 67 65 63 ~;
+pol 164 $e3 w;
+pol 165 4 * 61 +;
+rup 1 $e2 >= 1 : 116 75 73 71 69 67 65 63 61 ~;
+pol 167 $e2 w;
+pol 168 4 * 59 +;
+rup 1 $e1 >= 1 : 116 75 73 71 69 67 65 63 61 59 ~;
+pol 170 $e1 w;
+pol 171 57 +;
+pol 2 77 + 173 + s;
+pol 40 77 + 145 + s;
+pol 79 u2 w w2 w s;
+pol 176 174 +;
+pol 176 175 +;
+pol 79 $c1 w s;
+pol 178 172 + 179 + 177 2 * + 4 + s;
+pol 177 144 + 179 + 178 2 * + 42 + s;
+pol 81 u3 w w3 w s;
+pol 182 180 +;
+pol 182 181 +;
+pol 81 $c2 w s;
+pol 184 169 + 185 + 183 2 * + 6 + s;
+pol 183 141 + 185 + 184 2 * + 44 + s;
+pol 83 u4 w w4 w s;
+pol 188 186 +;
+pol 188 187 +;
+pol 83 $c3 w s;
+pol 190 166 + 191 + 189 2 * + 8 + s;
+pol 189 138 + 191 + 190 2 * + 46 + s;
+pol 85 u5 w w5 w s;
+pol 194 192 +;
+pol 194 193 +;
+pol 85 $c4 w s;
+pol 196 163 + 197 + 195 2 * + 10 + s;
+pol 195 135 + 197 + 196 2 * + 48 + s;
+pol 87 u6 w w6 w s;
+pol 200 198 +;
+pol 200 199 +;
+pol 87 $c5 w s;
+pol 202 160 + 203 + 201 2 * + 12 + s;
+pol 201 132 + 203 + 202 2 * + 50 + s;
+pol 89 u7 w w7 w s;
+pol 206 204 +;
+pol 206 205 +;
+pol 89 $c6 w s;
+pol 208 157 + 209 + 207 2 * + 14 + s;
+pol 207 129 + 209 + 208 2 * + 52 + s;
+pol 91 u8 w w8 w s;
+pol 212 210 +;
+pol 212 211 +;
+pol 91 $c7 w s;
+pol 214 154 + 215 + 213 2 * + 16 + s;
+pol 213 126 + 215 + 214 2 * + 54 + s;
+pol 93 u9 w w9 w s;
+pol 218 216 +;
+pol 218 217 +;
+pol 93 $c8 w s;
+pol 220 151 + 221 + 219 2 * + 18 + s;
+pol 219 123 + 221 + 220 2 * + 56 + s;
+pol 145 173 +;
+pol 224 96 + s;
+pol 144 172 + 174 + 175 + s 225 3 * +;
+pol 226 98 + s;
+pol 141 169 + 180 + 181 + s 227 3 * +;
+pol 228 100 + s;
+pol 138 166 + 186 + 187 + s 229 3 * +;
+pol 230 102 + s;
+pol 135 163 + 192 + 193 + s 231 3 * +;
+pol 232 104 + s;
+pol 132 160 + 198 + 199 + s 233 3 * +;
+pol 234 106 + s;
+pol 129 157 + 204 + 205 + s 235 3 * +;
+pol 236 108 + s;
+pol 126 154 + 210 + 211 + s 237 3 * +;
+pol 238 110 + s;
+pol 123 151 + 216 + 217 + s 239 3 * +;
+pol 240 112 + s;
+pol 120 148 + 222 + 223 + s 241 3 * +;
+pol 242 114 + s;
+pol 243 117 +;
+	qed : 244;
+qed;
+	end;
+	reflexivity
+	proof
+	proofgoal #1
+rup >= 1 : 283 264 266 268 270 272 274 276 278 280 282;
+	qed : 284;
+qed;
+	end;
+end;
+load_order lex10 x1 x2 x3 x4 x5 x6 x7 x8 x9 x10;
+red 1 x3 1 ~x5 1 ~s1 >= 1 : s1 -> 0 : subproof
+qed;
+red 1 ~x3 1 x5 2 s1 >= 2 : s1 -> 1 : subproof
+qed;
+red 1 ~x2 1 x5 2 s1 3 ~s2 >= 3 : s2 -> 0 : subproof
+qed;
+red 1 x2 1 ~x5 2 ~s1 2 s2 >= 2 : s2 -> 1 : subproof
+qed;
+red 2 s2 3 ~s3 >= 2 : s3 -> 0 : subproof
+qed;
+red 2 ~s2 2 s3 >= 1 : s3 -> 1 : subproof
+qed;
+red 1 ~x3 1 x9 2 s3 3 ~s4 >= 3 : s4 -> 0 : subproof
+qed;
+red 1 x3 1 ~x9 2 ~s3 2 s4 >= 2 : s4 -> 1 : subproof
+qed;
+red 1 ~x3 1 x5 1 ~t1 >= 1 : t1 -> 0 : subproof
+qed;
+red 1 x3 1 ~x5 2 t1 >= 2 : t1 -> 1 : subproof
+qed;
+red 1 x2 1 ~x5 1 ~s1 3 t1 4 ~t2 >= 4 : t2 -> 0 : subproof
+qed;
+red 1 ~x2 1 x5 1 s1 3 ~t1 3 t2 >= 3 : t2 -> 1 : subproof
+qed;
+red 1 ~s2 3 t2 4 ~t3 >= 3 : t3 -> 0 : subproof
+qed;
+red 1 s2 3 ~t2 3 t3 >= 2 : t3 -> 1 : subproof
+qed;
+red 1 x3 1 ~x9 1 ~s3 3 t3 4 ~t4 >= 4 : t4 -> 0 : subproof
+qed;
+red 1 ~x3 1 x9 1 s3 3 ~t3 3 t4 >= 3 : t4 -> 1 : subproof
+qed;
+red 1 ~s4 3 t4 4 ~t5 >= 3 : t5 -> 0 : subproof
+qed;
+red 1 s4 3 ~t4 3 t5 >= 2 : t5 -> 1 : subproof
+qed;
+dom 1 t5 >= 1 : x2 -> x9 x3 -> x5 x5 -> x2 x7 -> x7 x9 -> x3 : subproof
+	scope leq
+	proofgoal #1
+rup 1 ~$d9 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 $a1 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+pol 51 ~$a1 2 * + s;
+pol 52 89 2 * +;
+rup >= 0 : ~ ;
+rup >= 0 : ~ ;
+pol 53 92 2 * +;
+pol 54 93 2 * +;
+rup 1 ~$a3 1 $a4 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 $a3 1 ~$a4 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+pol 57 96 2 * +;
+pol 58 97 2 * +;
+rup 1 ~$a5 1 $a6 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 $a5 1 ~$a6 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+pol 61 100 2 * +;
+pol 62 101 2 * +;
+rup 1 ~$a7 1 $a8 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 $a7 1 ~$a8 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+pol 65 104 2 * +;
+pol 66 105 2 * +;
+rup 1 $d1 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+pol 69 ~$d1 3 * + s;
+pol 72 108 3 * +;
+rup >= 0 : ~ ;
+rup >= 0 : ~ ;
+pol 71 111 3 * +;
+pol 72 112 3 * +;
+rup 1 ~$d3 1 $d4 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 $d3 1 ~$d4 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+pol 75 115 3 * +;
+pol 76 116 3 * +;
+rup 1 ~$d5 1 $d6 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 $d5 1 ~$d6 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+pol 79 119 3 * +;
+pol 80 120 3 * +;
+rup 1 $d2 1 ~s1 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 $d3 1 ~s2 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 $d5 1 ~s3 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 $d7 1 ~s4 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 ~$a2 1 t1 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 ~$a3 1 t2 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 ~$a5 1 t3 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 ~$a7 1 t4 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 $d2 1 ~t1 1 t2 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 $d3 1 ~t2 1 t3 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 $d5 1 ~t3 1 t4 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 $d7 1 ~t4 1 t5 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 ~$d2 1 $d3 1 t1 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 ~$d3 1 $d5 1 t2 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 ~$d5 1 $d7 1 t3 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 ~$d7 1 $d9 1 t4 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 $d2 1 t1 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 $d3 1 t2 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 $d5 1 t3 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 $d7 1 t4 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 $d9 1 t5 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+	qed : 144;
+	end;
+	scope geq
+	proofgoal #2
+rup 1 ~$d9 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 $a1 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+pol 147 ~$a1 2 * + s;
+pol 148 185 2 * +;
+rup >= 0 : ~ ;
+rup >= 0 : ~ ;
+pol 149 188 2 * +;
+pol 150 189 2 * +;
+rup 1 ~$a3 1 $a4 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 $a3 1 ~$a4 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+pol 153 192 2 * +;
+pol 154 193 2 * +;
+rup 1 ~$a5 1 $a6 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 $a5 1 ~$a6 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+pol 157 196 2 * +;
+pol 158 197 2 * +;
+rup 1 ~$a7 1 $a8 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 $a7 1 ~$a8 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+pol 161 200 2 * +;
+pol 162 201 2 * +;
+rup 1 $d1 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+pol 165 ~$d1 3 * + s;
+pol 168 204 3 * +;
+rup >= 0 : ~ ;
+rup >= 0 : ~ ;
+pol 167 207 3 * +;
+pol 168 208 3 * +;
+rup 1 ~$d3 1 $d4 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 $d3 1 ~$d4 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+pol 171 211 3 * +;
+pol 172 212 3 * +;
+rup 1 ~$d5 1 $d6 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 $d5 1 ~$d6 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+pol 175 215 3 * +;
+pol 176 216 3 * +;
+rup 1 ~$a2 1 s1 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 ~$a3 1 s2 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 ~$a5 1 s3 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 ~$a7 1 s4 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 $d2 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 $d3 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 $d5 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup 1 $d7 >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+rup >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+	qed : 227;
+	end;
+	rup >= 1 : 4 6 7 8 10 3 5 9 11 2 1;
+qed : 228;
+output NONE ;
+conclusion NONE;
+end pseudo-Boolean proof;

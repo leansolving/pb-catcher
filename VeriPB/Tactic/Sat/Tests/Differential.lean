@@ -36,6 +36,9 @@ def showConstr (c : Constr) : String :=
     | .neg v => s!"{a}·~x{v}"
   s!"{ts} ≥ {c.degree}"
 
+/-- A core id set as a sorted list (insertion order does not matter). -/
+def sortedIds (s : Std.HashSet Nat) : List Nat := s.toList.mergeSort (· ≤ ·)
+
 /-- `none` if the two databases agree, otherwise a description of the first
 difference found. -/
 def dbDiff (slow : Std.HashMap Nat Constr) (fast : Std.HashMap Nat Fast.FConstr) :
@@ -54,20 +57,30 @@ def dbDiff (slow : Std.HashMap Nat Constr) (fast : Std.HashMap Nat Fast.FConstr)
 /-- Run both checkers step by step on one instance; throw on any difference.
 `fullEvery` controls how often the whole database is compared (every step by
 default); in between, only the size and the newly inserted constraint are
-compared. -/
-def runOne (name opbPath proofPath : String) (fullEvery : Nat := 1) : IO Unit := do
+compared. If `expectReject = some k`, both checkers must reject step `k`
+(and agree on every step before it); the test then stops there. -/
+def runOne (name opbPath proofPath : String) (fullEvery : Nat := 1)
+    (expectReject : Option Nat := none) :
+    IO Unit := do
   let opbStr ← IO.FS.readFile opbPath
   let proofStr ← IO.FS.readFile proofPath
-  let (numVars, constrs) ← match VeriPB.parseOPB opbStr with
+  let inst ← match VeriPB.parseOPBNamed opbStr with
     | .ok r => pure r
     | .error e => throw (IO.userError s!"{name}: OPB parse error: {e}")
-  let proof ← match VeriPB.parseVeriPBProof proofStr with
+  let obj : Objective := match inst.objective with
+    | some o => o.terms
+    | none => []
+  let proof ← match VeriPB.parseVeriPBProofWith
+      (VeriPB.VarTable.ofList inst.names inst.numVars) proofStr with
     | .ok p => pure p
     | .error e => throw (IO.userError s!"{name}: proof parse error: {e}")
+  let constrs := inst.constrs
+  -- the variable count of `checkProofBool` (fresh proof variables included)
+  let numVars := max inst.numVars proof.numVars
   let steps := proof.steps.toList
   let fuel := pbcDepth steps + 1
-  let mut slow := BoolCheckState.fromConstrs constrs numVars
-  let mut fast := Fast.FBoolCheckState.fromConstrs constrs numVars
+  let mut slow := BoolCheckState.fromConstrs constrs numVars obj
+  let mut fast := Fast.FBoolCheckState.fromConstrs constrs numVars obj
   if let some msg := dbDiff slow.db fast.db then
     throw (IO.userError s!"{name}: initial state: {msg}")
   let mut k := 0
@@ -76,6 +89,9 @@ def runOne (name opbPath proofPath : String) (fullEvery : Nat := 1) : IO Unit :=
     let rf := Fast.execFStepsFuel fuel fast [step]
     match rs, rf with
     | none, none =>
+      if expectReject == some k then
+        IO.println s!"{name}: {k} steps identical, both reject step {k} as expected"
+        return
       throw (IO.userError s!"{name}: both checkers reject step {k}")
     | some _, none =>
       throw (IO.userError s!"{name}: MISMATCH at step {k}: verified accepts, fast rejects")
@@ -84,6 +100,11 @@ def runOne (name opbPath proofPath : String) (fullEvery : Nat := 1) : IO Unit :=
     | some s, some f =>
       if s.nextId != f.nextId then
         throw (IO.userError s!"{name}: MISMATCH at step {k}: nextId {s.nextId} vs {f.nextId}")
+      if s.best != f.best then
+        throw (IO.userError s!"{name}: MISMATCH at step {k}: best {s.best} vs {f.best}")
+      if s.s2c != f.s2c || sortedIds s.coreIds != sortedIds f.coreIds then
+        throw (IO.userError s!"{name}: MISMATCH at step {k}: core sets \
+          {sortedIds s.coreIds} vs {sortedIds f.coreIds}")
       let diff? : Option String := Id.run do
         if s.db.size != f.db.size then
           return some s!"db size differs: verified {s.db.size} vs fast {f.db.size}"
@@ -103,6 +124,8 @@ def runOne (name opbPath proofPath : String) (fullEvery : Nat := 1) : IO Unit :=
       slow := s
       fast := f
     k := k + 1
+  if let some j := expectReject then
+    throw (IO.userError s!"{name}: step {j} accepted, expected rejection")
   if let some msg := dbDiff slow.db fast.db then
     throw (IO.userError s!"{name}: MISMATCH at end: {msg}")
   let okSlow := hasUnsatConclusion proof.steps slow
@@ -116,6 +139,117 @@ end VeriPB.Tests.Differential
 open VeriPB.Tests.Differential in
 #eval show IO Unit from do
   let d := "VeriPB/Tactic/Sat/Tests/data/"
-  for n in ["php21", "red_subproof", "red_swap", "red_const", "red_neglit", "dom_basic",
-      "weaken_cases", "rup_cases"] do
+  for n in ["php21", "red_subproof", "red_swap", "red_const", "red_neglit", "red_basic",
+      "weaken_cases", "rup_cases", "rup_prop"] do
     runOne n (d ++ n ++ ".opb") (d ++ n ++ "_kernel.pbp")
+  -- rup (CakePB semantics: one pass over the hints in order, the negated
+  -- target only through an explicit `~`, no hints = reject). rup_prop: one
+  -- weighted constraint forces three literals at once; accepted forms: hints
+  -- in propagation order, `~` twice, a target with a complementary pair.
+  -- Rejected at step 1 by both checkers and by CakePB, accepted by VeriPB
+  -- 3.0.1 (fixpoint rounds, implicit `~`, database propagation): hints
+  -- reversed (`rup_prop_rev`), no `~` (`rup_prop_implicit`), no hints
+  -- (`rup_prop_nohint`). rup_noprop: an unsatisfiable 2-CNF without unit
+  -- propagation from the empty assignment; step 2 (`rup >= 1 : 1 2 3 4`)
+  -- and the hint-free `rup >= 1 ;` are rejected (also by VeriPB and CakePB).
+  for n in ["rup_prop_rev", "rup_prop_implicit", "rup_prop_nohint"] do
+    runOne n (d ++ "rup_prop.opb") (d ++ n ++ "_kernel.pbp") (expectReject := some 1)
+  runOne "rup_noprop" (d ++ "rup_noprop.opb") (d ++ "rup_noprop_kernel.pbp")
+    (expectReject := some 2)
+  runOne "rup_noprop_nohint" (d ++ "rup_noprop.opb")
+    (d ++ "rup_noprop_nohint_kernel.pbp") (expectReject := some 1)
+  -- optimization proofs with solution logging (soli)
+  for n in ["vc6_linear", "vc6_sol_soli", "vc6_fakeunsat", "vc6_pbcok", "vc6_redok"] do
+    runOne n (d ++ "vc6.opb") (d ++ n ++ "_kernel.pbp")
+  -- rejected proofs: both checkers must reject the same step
+  for (n, k) in [("vc6_sol_unsat", 3), ("vc6_redsol", 1)] do
+    runOne n (d ++ "vc6.opb") (d ++ n ++ "_kernel.pbp") (expectReject := some k)
+  -- VeriPB 3 test-suite pairs (Tests/data/v3, kernel proofs by `veripb
+  -- --elaborate`). Accepted by CakePB except solution_logging_max_objective
+  -- (CakePB cannot parse `max:`). The expected rejections are statements the
+  -- checker does not support yet (output claims, loading an order, dominance, obji/eobj/obju)
+  -- and strengthening_to_core with a derived constraint touched by the
+  -- witness (database goals range over the whole database, see Reflect).
+  let v := d ++ "v3/"
+  for n in ["all_diff", "card_propagation_assert_negative_rhs",
+      "conclusion_BOUNDS_infeasible", "conclusion_SAT_sol_in_proof", "delete_core",
+      "delete_core_subproof_rup", "implication_contradiction_source", "implication",
+      "input_equality_with_id", "lower_rhs", "rup", "rup_php65",
+      "variable_form_division", "normalized_mir_cut", "variable_form_mir_cut",
+      "rup_objective_constant_term",
+      "solution_logging_improving_optimal_optional_value", "solution_logging_max_objective",
+      "solution_logging_optional_value"] do
+    runOne n (v ++ n ++ ".opb") (v ++ n ++ "_kernel.pbp")
+  for (n, k) in [("decision_output", 8), ("dominance_simple_order", 2),
+      ("dominance_with_aux_vars", 2), ("objective_improving", 2),
+      ("objective_update_diff_check", 1), ("objective_update_subproof", 8),
+      ("optimization_output_opposing_lits_objective", 8),
+      ("strengthening_to_core", 3)] do
+    runOne n (v ++ n ++ ".opb") (v ++ n ++ "_kernel.pbp") (expectReject := some k)
+  -- Hand-written tests for the T3 statements (Tests/data/t3). Every accepted
+  -- proof is accepted by VeriPB 3.0.1 and CakePB (core_range: VeriPB only,
+  -- CakePB cannot parse `core range`); every rejected one is rejected by
+  -- CakePB, and by VeriPB except where noted.
+  let t := d ++ "t3/"
+  for (o, n) in [("base4", "ia_ok"),          -- ia: weaker, scaled, extra literals, saturation
+      ("base4", "delc_ok"),                   -- core id, checked delc with qed shortcut / proofgoal #1
+      ("base4", "core_range"),                -- core range, deld of derived, plain delc of core
+      ("base4", "delc_s2c_qed"),              -- checked delc under strengthening_to_core with qed : id
+      ("base4", "red_qed"),                   -- red: top-level pol, qed : id shortcut
+      ("base3", "red_toplevel"),              -- red: top-level pol used by a later proofgoal
+      ("obj2", "obj_ok"),                     -- objective goal by implication and by proofgoal #2
+      ("obj3", "obj_pg2_ok"),                 -- objective goal #2 proved by its proofgoal only
+      ("trivpair", "red_trivpair"),           -- db goal 2 x2 2 ~x2 >= 1: trivial by its pair
+      ("base3", "red_goal_ok"),               -- positive control of red_goal_nohint
+      ("iacost", "ia_cost"),                  -- ia: excess cost s - t, target with ~l for source l
+      ("dbgoal", "red_dbgoal_other"),         -- db goal covered by another constraint's proved goal
+      ("base4", "delc_s2c_wit")] do           -- checked delc under s2c with a witness and qed : id
+    runOne n (t ++ o ++ ".opb") (t ++ n ++ ".pbp")
+  for (o, n, k) in [("base4", "ia_bad", 1),   -- not implied
+      ("base4", "ia_nohint", 1),              -- no hint (VeriPB searches, CakePB rejects)
+      ("base4", "delc_derived", 2),           -- checked delc of a derived constraint
+      ("base4", "delc_twoids", 1),            -- two ids with a subproof
+      ("base4", "deld_core", 1),              -- deld of a core constraint
+      ("base4", "delc_s2c_noqed", 2),         -- s2c without qed : id (VeriPB accepts, F4)
+      ("base3", "red_goal_bad", 1),           -- proofgoal derives no contradiction
+      ("base3", "red_goal_nohint", 1),        -- proofgoal without qed : id (VeriPB accepts)
+      ("obj2", "obj_bad", 1),                 -- objective goal neither implied nor proved
+      ("obj3", "obj_pg2_bad", 1),             -- obj_pg2_ok without its proofgoal #2 (VeriPB accepts)
+      ("base3", "red_scope_leak", 2),         -- top-level pol on an id of a closed proofgoal
+      ("base3", "red_litwit_bad", 1),         -- x1 -> x2: db goal 1 not covered (VeriPB accepts)
+      ("base3", "red_pg2_noobj", 1),          -- proofgoal #2 without an objective
+      ("base3", "red_pg_unknown", 1),         -- proofgoal #3
+      ("base3", "red_pg_missing", 1),         -- proofgoal 9 (no such constraint)
+      ("base3", "red_scope", 1),              -- scope leq (VeriPB and CakePB accept: no order)
+      ("base3", "red_scope_geq", 1),          -- scope geq
+      ("base4", "red_qed_noncontra", 1),      -- qed : 5 names the non-contradictory ¬C
+      ("base4", "s2c_red_deld", 3),           -- red result is core under s2c, deld rejects it
+      ("base4", "s2c_delc_derived", 3),       -- plain delc under s2c with a derived constraint
+                                              -- (VeriPB accepts)
+      ("base4", "delc_sub_derived", 2),       -- checked delc subproof uses derived id 5
+      ("base4", "core_id_missing", 1),        -- core id 9 (no such constraint)
+      ("base4", "core_range_lo", 4)] do       -- core range 5 6 covers 5: deld 5 rejected
+    runOne n (t ++ o ++ ".opb") (t ++ n ++ ".pbp") (expectReject := some k)
+  -- pol cuts `k c`, `k n`, `k m` (Tests/data/polcut, written by
+  -- testcampaign/t3b/handgen.py). polcut_ok applies every cut to five
+  -- constraints (negative variable-form degree, remainder 0, k = 1, k above
+  -- every coefficient) for k in {1,2,3,4,8} and checks each result with `ia`
+  -- against CakePB's value; the polcut_unsat proofs refute a constraint
+  -- together with the negation of one of its cuts. All accepted by VeriPB
+  -- 3.0.1 and CakePB. Rejected by all three: k = 0, and `ia` of a result
+  -- one degree stronger than CakePB's.
+  let pc := d ++ "polcut/"
+  runOne "polcut_ok" (pc ++ "polcut.opb") (pc ++ "polcut_ok.pbp")
+  for n in ["polcut_unsat_c", "polcut_unsat_n", "polcut_unsat_m"] do
+    runOne n (pc ++ n ++ ".opb") (pc ++ n ++ ".pbp")
+  for op in ["c", "n", "m"] do
+    runOne s!"polcut_k0_{op}" (pc ++ "polcut.opb") (pc ++ s!"polcut_k0_{op}.pbp")
+      (expectReject := some 1)
+    runOne s!"polcut_strong_{op}" (pc ++ "polcut.opb") (pc ++ s!"polcut_strong_{op}.pbp")
+      (expectReject := some 2)
+  -- Known deviation (degrees are natural numbers): `2 c` on
+  -- `~x1 + ~x2 + ~x3 >= 0` gives `>= -1` in VeriPB and CakePB and `>= 0`
+  -- here; adding `x5 >= 1` then gives `x5 >= 0` there and `x5 >= 1` here, so
+  -- the final `ia x5 >= 1` is accepted here and rejected by both references
+  -- (sound: it is the input constraint 6).
+  runOne "polcut_clamp" (pc ++ "polcut.opb") (pc ++ "polcut_clamp.pbp")

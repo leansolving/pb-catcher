@@ -10,26 +10,36 @@ import VeriPB.Tactic.Sat.PseudoBoolean
 /-!
 # VeriPB Proof Verification
 
-Parser and metaprogram for verifying VeriPB kernel-format proofs.
-This module parses DIMACS CNF and VeriPB proof files, constructs
-proof terms using the soundness lemmas from `PseudoBoolean.lean`,
-and produces Lean theorems.
+Parser and metaprogram for VeriPB kernel-format proofs. This module parses
+DIMACS CNF, OPB and VeriPB proof files, constructs proof terms using the
+soundness lemmas from `PseudoBoolean.lean`, and produces Lean theorems.
 
-## Supported kernel format subset
+## Parsed proof format
 
-* `f N` — verify formula size
-* `pol` — cutting planes in RPN: `+` (add), `*` (multiply),
-  `d` (divide/ceiling), `s` (saturate), `w` (weaken), literal axioms
-* `rup C : hints` — reverse unit propagation with mandatory hints
-* `pbc C : subproof ... qed : id` — proof by contradiction (subproofs)
-* `deld ids` / `delc ids` — deletion
-* `conclusion UNSAT : id`
+The parser accepts every statement that `veripb --elaborate` (VeriPB 3.0.1)
+writes, see `ProofStep`. Parsing a statement does not mean that a checker
+accepts it: the reflection checker (`Reflect.lean`) and the Expr-level
+builder below support a subset and reject the rest.
+
+## Variable names
+
+A variable `x<N>` (decimal `N ≥ 1` without leading zeros) has index `N - 1`.
+Every other name gets an index from a `VarTable`: the OPB parser assigns
+named variables the indices above the largest `x<N>` index in order of first
+appearance, and the proof parser assigns a fresh index (one above the
+formula's variables and every `x<N>` of the proof; the count then grows) to
+a name that first appears in a `red`/`dom` constraint or witness, a
+checked-deletion witness, an order variable declaration, or a `sol`/`soli`
+assignment (VeriPB adds unknown names there too). An unknown name anywhere
+else is a parse error. The parser
+rewrites every variable to the canonical string `x<idx+1>`, so the
+downstream converters (`opbLitToPB`, `parseSubstPairs`) only see `x<N>`.
 
 ## Main definitions
 
 * `VeriPB.parseDimacs` — DIMACS CNF parser
-* `VeriPB.parseVeriPBProof` — VeriPB kernel proof parser
-* `VeriPB.verifyProof` — data-level proof checker
+* `VeriPB.parseOPBNamed` / `VeriPB.parseOPB` — OPB parser
+* `VeriPB.parseVeriPBProofWith` / `VeriPB.parseVeriPBProof` — kernel proof parser
 * `veripb_proof` — command that registers a kernel-verified theorem
 * `from_veripb` — term elaborator for inline CNF/proof strings
 * `veripb_proof_file` — command that loads CNF/proof from files
@@ -38,13 +48,89 @@ and produces Lean theorems.
 
 namespace VeriPB
 
+/-! ### Variable table -/
+
+/-- Indices of the variables that are not written `x<N>`. `owned` is the set
+of indices held by such names; `numVars` is one above the largest index in
+use (by a name or by an `x<N>` seen so far). -/
+structure VarTable where
+  names : Std.HashMap String Nat := {}
+  owned : Std.HashSet Nat := {}
+  numVars : Nat := 0
+
+/-- Build a table from `(name, index)` pairs and a variable count. -/
+def VarTable.ofList (names : List (String × Nat)) (numVars : Nat) : VarTable :=
+  names.foldl (init := { numVars := numVars }) fun t (n, i) =>
+    { names := t.names.insert n i, owned := t.owned.insert i,
+      numVars := max t.numVars (i + 1) }
+
+/-- The named variables as `(name, index)` pairs sorted by index. -/
+def VarTable.toList (t : VarTable) : List (String × Nat) :=
+  t.names.toList.mergeSort fun a b => a.2 ≤ b.2
+
+/-- Byte `i` of `s`'s UTF-8 encoding (`0` if out of range). -/
+@[inline] private def byteAt (s : String) (i : Nat) : UInt8 :=
+  if h : i < s.utf8ByteSize then
+    s.getUTF8Byte ⟨i⟩ (by simpa [String.Pos.Raw.lt_iff] using h)
+  else 0
+
+/-- `s` without its first `k` bytes is `x<N>` with `N ≥ 1` written in
+decimal without leading zeros: `some (N-1)`. -/
+def canonXIndexAt? (s : String) (k : Nat) : Option Nat := Id.run do
+  let n := s.utf8ByteSize
+  -- 120 = 'x', 48..57 = '0'..'9'
+  if k + 2 > n || byteAt s k != 120 then return none
+  let b := byteAt s (k + 1)
+  if b < 49 || b > 57 then return none
+  let mut v := 0
+  for i in [k + 1:n] do
+    let b := byteAt s i
+    if b < 48 || b > 57 then return none
+    v := v * 10 + (b - 48).toNat
+  return some (v - 1)
+
+/-- `x<N>` with `N ≥ 1` written in decimal without leading zeros: `some (N-1)`. -/
+@[inline] def canonXIndex? (name : String) : Option Nat := canonXIndexAt? name 0
+
+/-- Canonical name of variable index `i`. -/
+@[inline] def canonVarName (i : Nat) : String := s!"x{i + 1}"
+
+/-- A proof-file variable name: at least two characters, starting with an
+ASCII letter, `_` or `$` (VeriPB auxiliary variables). -/
+def isVarName (s : String) : Bool :=
+  -- the first character is ASCII, so two bytes mean two characters
+  s.utf8ByteSize ≥ 2 &&
+  (let c := s.front; c.isAlpha || c == '_' || c == '$')
+
+/-- A nonempty string of decimal digits `[0-9]+`. -/
+def isDecDigits (s : String) : Bool := !s.isEmpty && s.all Char.isDigit
+
+/-- An integer token `[+-]?[0-9]+` (VeriPB's lexers; Lean's `String.toNat?`
+also accepts `_` separators, which VeriPB does not). -/
+def isIntToken (s : String) : Bool :=
+  isDecDigits s || ((s.startsWith "+" || s.startsWith "-") && isDecDigits (s.drop 1).toString)
+
+/-- Parse an integer token `[+-]?[0-9]+`. -/
+def intTokenVal? (s : String) : Option Int :=
+  if !isIntToken s then none
+  else if s.startsWith "+" then (s.drop 1).toString.toInt? else s.toInt?
+
+/-- Parse a natural number token `[0-9]+`. -/
+def natTokenVal? (s : String) : Option Nat :=
+  if isDecDigits s then s.toNat? else none
+
 -- Token-based parser infrastructure
 
-/-- A position in a token stream. -/
+/-- Parser state: token stream, position, variable table, and whether an
+unknown variable name may be given a fresh index (`allowFresh`). -/
 structure ParseState where
   tokens : Array String
   pos : Nat
-  deriving Repr
+  vars : VarTable := {}
+  allowFresh : Bool := false
+  /-- Every variable index must be below this bound (see
+  `parseVeriPBProofWith`). -/
+  varBound : Nat
 
 /-- Parser monad: Except for errors, State for position. -/
 abbrev ParseM := EStateM String ParseState
@@ -56,6 +142,11 @@ def peek : ParseM String := do
     return s.tokens[s.pos]
   else
     throw "unexpected end of input"
+
+/-- Peek `k` tokens ahead (`peekAt 0 = peek`); `""` past the end. -/
+def peekAt (k : Nat) : ParseM String := do
+  let s ← get
+  return s.tokens.getD (s.pos + k) ""
 
 /-- Consume and return the current token. -/
 def next : ParseM String := do
@@ -76,38 +167,88 @@ def expect (tok : String) : ParseM Unit := do
 /-- Expect and consume a semicolon. -/
 def expectSemicolon : ParseM Unit := expect ";"
 
+/-- Consume the current token if it equals `tok`. -/
+def accept (tok : String) : ParseM Bool := do
+  if (← peekAt 0) == tok then
+    let _ ← next
+    return true
+  else return false
+
 /-- Try to parse a natural number from the current token. -/
 def parseNat : ParseM Nat := do
   let tok ← next
-  match tok.toNat? with
+  match natTokenVal? tok with
   | some n => return n
   | none => throw s!"expected natural number, got '{tok}'"
+
+/-- Parse a signed integer token (`5`, `+5`, `-5`). -/
+def parseInt : ParseM Int := do
+  let tok ← next
+  match intTokenVal? tok with
+  | some n => return n
+  | none => throw s!"expected integer, got '{tok}'"
+
+/-- Resolve a variable name to its index (see the module doc), given
+`cx = canonXIndex? name`. -/
+def resolveVarIdx (name : String) (cx : Option Nat) : ParseM Nat := do
+  let s ← get
+  match cx with
+  | some i =>
+    if !s.vars.owned.isEmpty && s.vars.owned.contains i then
+      throw s!"variable '{name}' collides with a named variable of the same index"
+    if i ≥ s.varBound then
+      throw s!"variable index of '{name}' too large"
+    if i + 1 > s.vars.numVars then
+      set { s with vars := { s.vars with numVars := i + 1 } }
+    return i
+  | none =>
+    if !isVarName name then
+      throw s!"invalid variable name '{name}'"
+    match s.vars.names[name]? with
+    | some i => return i
+    | none =>
+      if !s.allowFresh then
+        throw s!"unknown variable '{name}'"
+      let i := s.vars.numVars
+      if i ≥ s.varBound then
+        throw s!"too many variables (fresh name '{name}')"
+      set { s with vars := { names := s.vars.names.insert name i,
+                             owned := s.vars.owned.insert i,
+                             numVars := i + 1 } }
+      return i
+
+/-- Resolve a variable name to its index (see the module doc). -/
+@[inline] def resolveVar (name : String) : ParseM Nat :=
+  resolveVarIdx name (canonXIndex? name)
+
+/-- Run `x` with fresh variable names allowed. -/
+def withFresh {α : Type} (x : ParseM α) : ParseM α := do
+  let old := (← get).allowFresh
+  modify fun s => { s with allowFresh := true }
+  let r ← x
+  modify fun s => { s with allowFresh := old }
+  return r
 
 /-! ### Tokenizer
 
 Byte-level scanner over the UTF-8 encoding of the input. Tokens are maximal
 runs of bytes other than space, tab, CR, LF and `;`; a `;` is always a token
-of its own. A line whose first non-blank byte is `%`, or is `c` followed by a
-blank or the end of the line, is a comment and is skipped. All separators
-are ASCII, so they never occur inside a multi-byte UTF-8 sequence; token
-boundaries are therefore character boundaries and every extracted token is a
-valid UTF-8 string. -/
-
-/-- Byte `i` of `s`'s UTF-8 encoding (`0` if out of range). -/
-@[inline] private def byteAt (s : String) (i : Nat) : UInt8 :=
-  if h : i < s.utf8ByteSize then
-    s.getUTF8Byte ⟨i⟩ (by simpa [String.Pos.Raw.lt_iff] using h)
-  else 0
+of its own. Comments are skipped:
+* `%` up to the end of the line, anywhere (VeriPB 3);
+* with `dimacsComments` (DIMACS input only), a line whose first non-blank
+  byte is `c` followed by a blank or the end of the line.
+All separators are ASCII, so they never occur inside a multi-byte UTF-8
+sequence; token boundaries are therefore character boundaries and every
+extracted token is a valid UTF-8 string. -/
 
 @[inline] private def isBlankByte (b : UInt8) : Bool :=
   b == 32 || b == 9 || b == 13
 
 @[inline] private def isSepByte (b : UInt8) : Bool :=
-  isBlankByte b || b == 10 || b == 59
+  isBlankByte b || b == 10 || b == 59 || b == 37
 
-/-- Tokenize a string: split on blanks, separate semicolons, drop comment
-    lines (starting with `%` or `c`). -/
-def tokenize (s : String) : Array String := Id.run do
+/-- Tokenize a string: split on blanks, separate semicolons, drop comments. -/
+def tokenize (s : String) (dimacsComments : Bool := false) : Array String := Id.run do
   let n := s.utf8ByteSize
   let mut toks : Array String := Array.mkEmpty (n / 3)
   let mut i := 0
@@ -118,7 +259,8 @@ def tokenize (s : String) : Array String := Id.run do
     let b := byteAt s j
     -- 37 = '%', 99 = 'c'
     let isComment := j < n && (b == 37 ||
-      (b == 99 && (j + 1 ≥ n || isBlankByte (byteAt s (j + 1)) || byteAt s (j + 1) == 10)))
+      (dimacsComments && b == 99 &&
+        (j + 1 ≥ n || isBlankByte (byteAt s (j + 1)) || byteAt s (j + 1) == 10)))
     let mut k := j
     if isComment then
       while k < n && byteAt s k != 10 do k := k + 1
@@ -126,6 +268,9 @@ def tokenize (s : String) : Array String := Id.run do
       while k < n do
         let c := byteAt s k
         if c == 10 then break
+        else if c == 37 then
+          -- `%` comment up to the end of the line
+          while k < n && byteAt s k != 10 do k := k + 1
         else if isBlankByte c then k := k + 1
         else if c == 59 then
           toks := toks.push ";"
@@ -174,7 +319,7 @@ def dimacsClauseToPB (clause : DimacsClause) : Except String Sat.PB.Constr := do
     Expected: `p cnf <numVars> <numClauses>` then clauses terminated by `0`.
     Validates clause count and literal bounds. -/
 def parseDimacs (input : String) : Except String DimacsFormula := do
-  let tokens := tokenize input
+  let tokens := tokenize input (dimacsComments := true)
   -- Find "p" "cnf" header
   let rec findP (pos : Nat) : Nat :=
     if h : pos < tokens.size && tokens[pos]! != "p" then findP (pos + 1) else pos
@@ -219,9 +364,11 @@ def parseDimacs (input : String) : Except String DimacsFormula := do
         throw s!"DIMACS literal {lit} out of bounds (numVars={numVars})"
   return ⟨numVars, numClauses, clauses⟩
 
+
 -- Parsed VeriPB proof types
 
-/-- A literal in OPB format: variable name with optional negation. -/
+/-- A literal in OPB format: variable name with optional negation. After
+parsing, the name is always the canonical `x<idx+1>`. -/
 inductive OPBLit where
   | pos : String → OPBLit   -- `x3` → positive literal for variable "x3"
   | neg : String → OPBLit   -- `~x3` → negative literal for variable "x3"
@@ -233,7 +380,8 @@ structure OPBTerm where
   lit : OPBLit
   deriving Repr
 
-/-- An OPB constraint: terms and degree. -/
+/-- An OPB constraint `Σ coeff·lit ≥ degree`: terms and degree. Negative
+coefficients and a negative degree are normalized away at parse time. -/
 structure OPBConstr where
   terms : List OPBTerm
   degree : Nat
@@ -242,13 +390,17 @@ structure OPBConstr where
 /-- An operation in a `pol` RPN sequence. -/
 inductive PolOp where
   | pushId (id : Nat)          -- Push constraint by ID
-  | pushNat (n : Nat)          -- Push raw integer (for `*` / `d` operands)
+  | pushNat (n : Nat)          -- Push raw integer (for `*` / `d` / `-` operands)
   | pushLitAxiom (l : OPBLit) -- Push literal axiom (l >= 0)
   | add                        -- Pop two, add
   | mul                        -- Pop nat and constraint, multiply
   | div                        -- Pop nat and constraint, divide (ceiling)
   | saturate                   -- Pop one, saturate
   | weaken (varName : String)  -- Pop one, weaken by removing variable
+  | lowerRhs                   -- `k -`: pop nat k and constraint, degree - k
+  | divVar                     -- `k c`: pop nat k and constraint, variable-form division
+  | mir                        -- `k n`: pop nat k and constraint, normalized MIR cut
+  | mirVar                     -- `k m`: pop nat k and constraint, variable-form MIR cut
   deriving Repr
 
 /-- A RUP hint: either a constraint ID or `~` (the negated constraint). -/
@@ -257,28 +409,140 @@ inductive RupHint where
   | negC           -- The `~` symbol: negated target constraint
   deriving Repr, Inhabited
 
-/-- A proof step in the VeriPB kernel format. -/
+/-- An objective as written in a proof (`eobj`, `obju`): integer
+coefficients over literals plus a constant, `Σ coeff·lit + constant`. -/
+structure ProofObjective where
+  terms : List (Int × OPBLit)
+  constant : Int
+  deriving Repr
+
+/-- A bound in `conclusion BOUNDS`: an integer or `INF`. -/
+inductive Bound where
+  | finite (v : Int)
+  | inf
+  deriving Repr, BEq
+
+/-- `scope leq` / `scope geq` inside a `dom`/`red` subproof. -/
+inductive ScopeKind where
+  | leq
+  | geq
+  deriving Repr, BEq
+
+/-- `obju new` / `obju diff`. -/
+inductive ObjUpdateKind where
+  | new
+  | diff
+  deriving Repr, BEq
+
+/-- Which strengthening rule a `strengthening` step came from. -/
+inductive StrengtheningRule where
+  | red
+  | dom
+  deriving Repr, BEq
+
+/-- Output guarantee other than `NONE` (`output NONE ;` is `ProofStep.output`). -/
+inductive OutputGuarantee where
+  | derivable
+  | equisatisfiable
+  | equioptimal
+  deriving Repr, BEq
+
+/-- Output type of an `output` statement. -/
+inductive OutputKind where
+  | file                                     -- `FILE`: formula in a separate file
+  | implicit                                 -- `IMPLICIT`
+  | permutation (ids : List Nat)             -- `PERMUTATION ids`
+  | constraints (objective : Option ProofObjective) (isMax : Bool)
+      (constrs : List OPBConstr)             -- `CONSTRAINTS opb ... end`
+  deriving Repr
+
+/-- Transitivity block of a `def_order`. -/
+structure OrderTransitivity (σ : Type) where
+  freshRight : List Nat
+  freshAux1 : List Nat
+  freshAux2 : List Nat
+  /-- Items of `proof ... qed` (usually `proofgoal` steps). -/
+  proof : Array σ
+  deriving Repr
+
+/-- A `def_order` block. Variables are global variable indices. -/
+structure OrderDef (σ : Type) where
+  name : String
+  left : List Nat
+  right : List Nat
+  aux : List Nat
+  /-- Items of the `spec ... end` block, if present. -/
+  spec : Option (Array σ)
+  /-- Constraints of the `def ... end` block. -/
+  defConstrs : List OPBConstr
+  transitivity : Option (OrderTransitivity σ)
+  /-- Items of the reflexivity `proof ... qed` block, if present. -/
+  reflexivity : Option (Array σ)
+  deriving Repr
+
+/-- A proof step in the VeriPB kernel format (the output of
+`veripb --elaborate`, VeriPB 3.0.1).
+
+A subproof (of `red`/`dom`, checked `delc`, `obju`) is stored as its item
+array plus the optional `qed : id` hint. Items are steps, `proofgoal` steps
+and `scope` steps; the last two occur only inside subproofs. -/
 inductive ProofStep where
   | formulaSize (n : Nat)                          -- `f N ;`
   | pol (ops : List PolOp)                         -- `pol <RPN> ;`
   | rup (constr : OPBConstr) (hints : List RupHint) -- `rup C : hints ;`
+  | ia (constr : OPBConstr) (premise : Option Nat) -- `ia C : id ;`
   | deld (ids : List Nat)                          -- `deld ids ;`
-  | delc (ids : List Nat)                          -- `delc ids ;`
+  | delc (ids : List Nat)                          -- `delc ids ;` (unchecked)
+  /-- Checked deletion `delc ids : ω [: subproof ... qed [: id]] ;`. -/
+  | delcChecked (ids : List Nat) (subst : List (String × String))
+      (subproof : Option (Array ProofStep × Option Nat))
+  | core (ids : List Nat)                          -- `core id ids ;`
+  | coreRange (lo hi : Nat)                        -- `core range lo hi ;` ([lo, hi))
+  | strengtheningToCore (on : Bool)                -- `strengthening_to_core on|off ;`
   | pbc (constr : OPBConstr) (steps : Array ProofStep) (resultId : Nat)
+  /-- `red C : ω [: subproof ... qed ;]` whose subproof consists of
+      `proofgoal` blocks with hints only (or is absent).
+      goals: (goalId, inner steps, result constraint id) -/
   | red (constr : OPBConstr) (subst : List (String × String))
         (goals : Array (String × Array ProofStep × Nat))
-        -- goals: (goalId, inner steps, result constraint id)
+  /-- `dom C : ω [: subproof ... qed ;]`, same shape restriction as `red`. -/
+  | dom (constr : OPBConstr) (subst : List (String × String))
+        (goals : Array (String × Array ProofStep × Nat))
+  /-- `red`/`dom` with a general subproof: top-level steps, `scope` blocks,
+      proofgoals without hint, or a `qed : id` hint. -/
+  | strengthening (rule : StrengtheningRule) (constr : OPBConstr)
+      (subst : List (String × String)) (items : Array ProofStep)
+      (qedHint : Option Nat)
+  /-- `proofgoal ID ... qed [: id] ;` (only inside subproofs). -/
+  | proofgoal (goalId : String) (steps : Array ProofStep) (hint : Option Nat)
+  /-- `scope leq|geq ... end ;` (only inside subproofs). -/
+  | scope (kind : ScopeKind) (items : Array ProofStep)
+  | defOrder (order : OrderDef ProofStep)          -- `def_order ... end ;`
+  | loadOrder (name : Option String) (lits : List OPBLit) -- `load_order [name lits] ;`
+  | sol (lits : List OPBLit) (value : Option Int)  -- `sol lits [: v] ;`
+  | soli (lits : List OPBLit) (value : Option Int) -- `soli lits [: v] ;`
+  | obji (value : Int)                             -- `obji v ;`
+  | eobj (obj : ProofObjective)                    -- `eobj f ;`
+  /-- `obju new|diff f [: subproof ... qed [: id]] ;` -/
+  | obju (kind : ObjUpdateKind) (obj : ProofObjective)
+      (subproof : Option (Array ProofStep × Option Nat))
   | output                                         -- `output NONE ;`
+  | outputClaim (guarantee : OutputGuarantee) (kind : OutputKind)
   | conclusion (id : Nat)                          -- `conclusion UNSAT : id ;`
-  | sol (lits : List OPBLit)                       -- `sol lits ;`
-  | soli (lits : List OPBLit)                      -- `soli lits ;`
-  | conclusionSat (lits : List OPBLit)             -- `conclusion SAT : lits ;`
-  | conclusionBounds (lb : Nat) (lbHint : Option Nat) (ub : Nat) (ubLits : List OPBLit)
+  | conclusionSat (lits : Option (List OPBLit))    -- `conclusion SAT [: lits] ;`
+  /-- `conclusion BOUNDS lb [: id] ub [: lits] ;` -/
+  | conclusionBounds (lb : Bound) (lbHint : Option Nat) (ub : Bound)
+      (ubLits : Option (List OPBLit))
+  | conclusionNone                                 -- `conclusion NONE ;`
   deriving Repr
 
-/-- A complete parsed VeriPB kernel proof. -/
+/-- A complete parsed VeriPB kernel proof. `numVars` is the variable count
+after the proof's fresh variables were added, `names` the full name table
+(non-`x<N>` names with their indices). -/
 structure VeriPBProof where
   steps : Array ProofStep
+  numVars : Nat := 0
+  names : List (String × Nat) := []
   deriving Repr
 
 -- OPB constraint parser
@@ -343,18 +607,10 @@ def parseSubstPairs (pairs : List (String × String)) (numVars : Nat) :
         go rest (seen.insert varIdx) (acc ++ [(varIdx, sv)])
   go pairs ∅ []
 
-/-- Check if a token looks like a variable name (starts with letter or ~). -/
-def isVarToken (tok : String) : Bool :=
-  match tok.toList.head? with
-  | some c => c == '~' || c.isAlpha || c == '_'
-  | none => false
-
 /-- Parse a coefficient string like "+1", "3", "-2" into an Int.
     Supports both positive and negative coefficients. -/
 def parseCoeffInt (tok : String) : Except String Int :=
-  -- Strip leading +
-  let cleaned := if tok.startsWith "+" then (tok.drop 1).toString else tok
-  match cleaned.toInt? with
+  match intTokenVal? tok with
   | some n => .ok n
   | none => .error s!"invalid coefficient: {tok}"
 
@@ -363,77 +619,121 @@ def OPBLit.negate : OPBLit → OPBLit
   | .pos name => .neg name
   | .neg name => .pos name
 
-/-- Parse an OPB constraint from tokens starting at the current position.
-    Format: `[+|−]c1 var1 [+|−]c2 var2 ... >= d`
-    Also handles the degenerate case `>= d` (empty LHS).
-    Negative coefficients `-a·x` are normalized to `a·~x` with degree adjustment:
-    `-a·x ≡ a·~x - a`, so degree increases by `a`. -/
+
+/-! ### Proof parser
+
+The grammar follows VeriPB 3.0.1 (`src/parser/parser.rs`, rule dispatch in
+`Parser::rule`) restricted to the statements that `veripb --elaborate`
+writes (`elaborate()` in `src/rules/*.rs`). -/
+
+/-- If the token is a literal (`name` or `~name`) by its spelling, resolve
+the variable with `resolveVarIdx` and return the literal in canonical form;
+otherwise `none`. -/
+def parseLitTok? (tok : String) : ParseM (Option OPBLit) := do
+  -- 126 = '~'
+  let neg := byteAt tok 0 == 126
+  let cx := canonXIndexAt? tok (if neg then 1 else 0)
+  let name := if neg then (tok.drop 1).toString else tok
+  if cx.isNone && !isVarName name then return none
+  let i ← resolveVarIdx name cx
+  -- an `x<N>` name is already canonical; reuse the string
+  let canon := if cx.isSome then name else canonVarName i
+  return some (if neg then .neg canon else .pos canon)
+
+/-- Parse a literal token `name` or `~name`; the variable is resolved with
+`resolveVar` and written in canonical form. -/
+def parseLitTok (tok : String) : ParseM OPBLit := do
+  match ← parseLitTok? tok with
+  | some l => return l
+  | none => throw s!"expected a literal, got '{tok}'"
+
+/-- `Σ cᵢ·lᵢ ≥ d` with integer coefficients and degree, normalized to
+nonnegative coefficients (`-a·l ≡ a·~l - a`) and a degree clamped at `0`
+(a constraint `Σ ≥ d` with `d ≤ 0` over a nonnegative sum is trivially
+true, as is `Σ ≥ 0`). -/
+def mkGeqConstr (terms : List (Int × OPBLit)) (degree : Int) : OPBConstr :=
+  let (ts, adj) := terms.foldl (init := (([] : List OPBTerm), (0 : Int)))
+    fun (acc, adj) (c, l) =>
+      if c ≥ 0 then (⟨c.toNat, l⟩ :: acc, adj)
+      else (⟨(-c).toNat, l.negate⟩ :: acc, adj - c)
+  ⟨ts.reverse, (degree + adj).toNat⟩
+
+/-- Parse `c₁ l₁ c₂ l₂ ...` up to (not including) a token in `stops`. -/
+def parseIntTerms (stops : List String) : ParseM (List (Int × OPBLit)) := do
+  let mut terms : List (Int × OPBLit) := []
+  while !stops.contains (← peek) do
+    let c ← parseInt
+    let lit ← parseLitTok (← next)
+    terms := (c, lit) :: terms
+  return terms.reverse
+
+/-- Parse a proof constraint `c₁ l₁ ... ≥ d` (the form VeriPB's elaborator
+writes; `d` may be negative). Also handles the empty left-hand side. -/
 def parseOPBConstr : ParseM OPBConstr := do
-  let mut terms : List OPBTerm := []
-  let mut degreeAdj : Nat := 0
-  -- Parse terms until we see ">="
-  while (← peek) != ">=" do
-    let coeffTok ← next
-    let coeffI ← match parseCoeffInt coeffTok with
-      | .ok n => pure n
-      | .error e => throw e
-    let varTok ← next
-    let lit ← match parseOPBLit varTok with
-      | .ok l => pure l
-      | .error e => throw e
-    if coeffI ≥ 0 then
-      terms := ⟨coeffI.toNat, lit⟩ :: terms
-    else
-      -- Negative coeff: -a·x ≡ a·~x, degree += a
-      let absCoeff := (-coeffI).toNat
-      terms := ⟨absCoeff, lit.negate⟩ :: terms
-      degreeAdj := degreeAdj + absCoeff
+  let terms ← parseIntTerms [">="]
   expect ">="
-  let degree ← parseNat
-  return ⟨terms.reverse, degree + degreeAdj⟩
+  let degree ← parseInt
+  return mkGeqConstr terms degree
 
--- VeriPB kernel proof parser
+/-- Parse an OPB constraint with relation `>=`, `<=` or `=` and the final
+`;` (used in `def` blocks and `CONSTRAINTS` listings). Returns the `≥`
+part first, then the `≤` part, as VeriPB's `generate_constraints` does. -/
+def parseRelConstr : ParseM (List OPBConstr) := do
+  if (← peek).startsWith "@" then let _ ← next  -- optional label
+  let terms ← parseIntTerms [">=", "<=", "="]
+  let rel ← next
+  let degree ← parseInt
+  expectSemicolon
+  let geq := mkGeqConstr terms degree
+  let leq := mkGeqConstr (terms.map fun (c, l) => (-c, l)) (-degree)
+  match rel with
+  | ">=" => return [geq]
+  | "<=" => return [leq]
+  | _ => return [geq, leq]
 
-/-- Parse the RPN operations for a `pol` step.
-    Tokens are consumed until `;` is reached.
-    In VeriPB RPN, `*` and `d` consume an integer operand from the stack,
-    and `w` consumes the variable that precedes it (`x3 w`).
-    Numbers that immediately precede `*` or `d` are pushed as raw integers;
-    all other numbers are pushed as constraint IDs.
-    We use lookahead: if the next token after a number is `*` or `d`,
-    push as `.pushNat`; otherwise push as `.pushId`. -/
+/-- Parse the RPN operations for a `pol` step (VeriPB `pol_rule`).
+Tokens are consumed until `;`. A number directly before `*`, `d` or `-` is
+an integer operand, every other number a constraint ID; `w` consumes the
+variable that precedes it (`x3 w`). `c` is division in variable form, `n`
+and `m` are the normalized and variable-form mixed-integer rounding cuts;
+a number directly before them is their integer operand. -/
 def parsePolOps : ParseM (List PolOp) := do
   let mut ops : List PolOp := []
   while (← peek) != ";" do
     let tok ← next
     if tok == "+" then
       ops := .add :: ops
+    else if tok == "-" then
+      ops := .lowerRhs :: ops
     else if tok == "s" then
       ops := .saturate :: ops
     else if tok == "*" then
       ops := .mul :: ops
     else if tok == "d" then
       ops := .div :: ops
+    else if tok == "c" then
+      ops := .divVar :: ops
+    else if tok == "n" then
+      ops := .mir :: ops
+    else if tok == "m" then
+      ops := .mirVar :: ops
     else if tok == "w" then
-      -- VeriPB syntax: the variable precedes `w` (`pol 1 x3 w ;`); it was
-      -- read as a literal-axiom push, which `w` now consumes.
       match ops with
       | .pushLitAxiom (.pos varName) :: rest => ops := .weaken varName :: rest
       | _ => throw "weakening: expected a variable before 'w'"
-    else if isVarToken tok then
-      match parseOPBLit tok with
-      | .ok lit => ops := .pushLitAxiom lit :: ops
-      | .error e => throw e
     else
-      -- Number: use lookahead to decide if it's a constraint ID or integer operand
-      match tok.toNat? with
-      | some n =>
-        let nextTok ← peek
-        if nextTok == "*" || nextTok == "d" then
-          ops := .pushNat n :: ops
-        else
-          ops := .pushId n :: ops
-      | none => throw s!"unexpected token in pol: '{tok}'"
+      match ← parseLitTok? tok with
+      | some lit => ops := .pushLitAxiom lit :: ops
+      | none =>
+        match natTokenVal? tok with
+        | some n =>
+          let nextTok ← peek
+          if nextTok == "*" || nextTok == "d" || nextTok == "-" ||
+              nextTok == "c" || nextTok == "n" || nextTok == "m" then
+            ops := .pushNat n :: ops
+          else
+            ops := .pushId n :: ops
+        | none => throw s!"unexpected token in pol: '{tok}'"
   return ops.reverse
 
 /-- Parse RUP hints: list of constraint IDs and/or `~`, terminated by `;`. -/
@@ -444,34 +744,205 @@ def parseRupHints : ParseM (List RupHint) := do
     if tok == "~" then
       hints := .negC :: hints
     else
-      match tok.toNat? with
+      match natTokenVal? tok with
       | some n => hints := .id n :: hints
       | none => throw s!"unexpected RUP hint: '{tok}'"
   return hints.reverse
 
-/-- Parse a list of constraint IDs terminated by `;`. -/
+/-- Parse a list of constraint IDs up to `;` or `:` (not consumed). -/
 def parseIdList : ParseM (List Nat) := do
   let mut ids : List Nat := []
-  while (← peek) != ";" do
+  while (← peek) != ";" && (← peek) != ":" do
     let n ← parseNat
     ids := n :: ids
   return ids.reverse
 
-/-- Parse a list of solution literals terminated by `;` or `end`.
-    Format: `x1 ~x2 x3` etc. -/
+/-- Parse solution literals up to `;` or `:` (not consumed). -/
 def parseSolLits : ParseM (List OPBLit) := do
   let mut lits : List OPBLit := []
-  let mut tok ← peek
-  while tok != ";" && tok != "end" do
-    let t ← next
-    match parseOPBLit t with
-    | .ok lit => lits := lit :: lits
-    | .error e => throw e
-    tok ← peek
+  while (← peek) != ";" && (← peek) != ":" do
+    lits := (← parseLitTok (← next)) :: lits
   return lits.reverse
 
+/-- Parse a witness `v₁ -> a₁ v₂ -> a₂ ...` (VeriPB `witness`; the arrow
+may be omitted) up to and including the closing `:` or `;`, which is
+returned. Values are `0`, `1` or a literal. -/
+def parseWitness : ParseM (List (String × String) × String) := do
+  let mut pairs : List (String × String) := []
+  let mut tok ← next
+  while tok != ":" && tok != ";" do
+    if tok.startsWith "~" then
+      throw s!"witness: expected a variable, got '{tok}'"
+    let i ← resolveVar tok
+    let _ ← accept "->"
+    let valTok ← next
+    let val ← if valTok == "0" || valTok == "1" then pure valTok
+      else match ← parseLitTok valTok with
+        | .pos n => pure n
+        | .neg n => pure ("~" ++ n)
+    pairs := (canonVarName i, val) :: pairs
+    tok ← next
+  return (pairs.reverse, tok)
+
+/-- Parse an objective `c₁ l₁ ... [k]` (VeriPB `objective`) up to `;` or
+`:` (not consumed): coefficient-literal pairs and an optional trailing
+constant. -/
+def parseObjective : ParseM ProofObjective := do
+  let mut terms : List (Int × OPBLit) := []
+  let mut constant : Int := 0
+  let mut nonempty := false
+  while (← peek) != ";" && (← peek) != ":" do
+    let c ← parseInt
+    nonempty := true
+    let t ← peek
+    if t == ";" || t == ":" then
+      constant := c
+    else
+      terms := (c, ← parseLitTok (← next)) :: terms
+  if !nonempty then throw "objective: expected a coefficient"
+  return ⟨terms.reverse, constant⟩
+
+/-- Parse a bound: a signed integer or `INF`. -/
+def parseBound : ParseM Bound := do
+  if (← peek) == "INF" then
+    let _ ← next
+    return .inf
+  return .finite (← parseInt)
+
+/-- After `qed` (and an optional repeated keyword): `;` or `: id ;`. -/
+def parseQedHint : ParseM (Option Nat) := do
+  if ← accept ";" then return none
+  expect ":"
+  let id ← parseNat
+  expectSemicolon
+  return some id
+
+/-- Declared variables up to and including `;` (order `vars` blocks). A new
+name gets a fresh index. -/
+def parseVarDecls : ParseM (List Nat) := withFresh do
+  let mut vs : List Nat := []
+  while (← peek) != ";" do
+    vs := (← resolveVar (← next)) :: vs
+  expectSemicolon
+  return vs.reverse
+
+/-- Where a statement occurs (VeriPB `Scope`); decides whether `proofgoal`
+and `scope` are allowed. -/
+inductive StepCtx where
+  | top | subproof | scope | proofgoal | proof | spec
+  deriving BEq, Inhabited
+
+/-- `red`/`dom` with an optional subproof. A subproof that consists of
+`proofgoal` blocks with hints and ends with a plain `qed ;` gives the
+`red`/`dom` constructor, every other subproof `strengthening`. -/
+def mkStrengthening (rule : StrengtheningRule) (constr : OPBConstr)
+    (subst : List (String × String))
+    (sub : Option (Array ProofStep × Option Nat)) : ProofStep :=
+  let simple (goals : Array (String × Array ProofStep × Nat)) : ProofStep :=
+    match rule with
+    | .red => .red constr subst goals
+    | .dom => .dom constr subst goals
+  match sub with
+  | none => simple #[]
+  | some (items, none) =>
+    match items.mapM (fun s => match s with
+        | .proofgoal gid steps (some h) => some (gid, steps, h)
+        | _ => none) with
+    | some goals => simple goals
+    | none => .strengthening rule constr subst items none
+  | some (items, hint) => .strengthening rule constr subst items hint
+
+mutual
+
+/-- Parse statements until the token `stop` (not consumed). -/
+partial def parseItems (ctx : StepCtx) (stop : String) :
+    ParseM (Array ProofStep) := do
+  let mut items : Array ProofStep := #[]
+  while (← peek) != stop do
+    items := items.push (← parseStep ctx)
+  return items
+
+/-- After the `subproof` keyword: items up to `qed`, then `qed [rule]`
+followed by `;` or `: id ;` (VeriPB `subproof`, `subproof_qed`). -/
+partial def parseSubproof (rule : String) :
+    ParseM (Array ProofStep × Option Nat) := do
+  let _ ← accept ";"  -- lenient: `subproof ;`
+  let items ← parseItems .subproof "qed"
+  expect "qed"
+  let _ ← accept rule
+  let hint ← parseQedHint
+  return (items, hint)
+
+/-- `proof ... qed [proof] ;` inside `def_order` (VeriPB `order_proof`). -/
+partial def parseOrderProof : ParseM (Array ProofStep) := do
+  expect "proof"
+  let items ← parseItems .proof "qed"
+  expect "qed"
+  let _ ← accept "proof"
+  expectSemicolon
+  return items
+
+/-- Parse the body of `def_order NAME` (VeriPB `def_order_rule`). -/
+partial def parseDefOrder (name : String) : ParseM (OrderDef ProofStep) := do
+  expect "vars"
+  expect "left"
+  let left ← parseVarDecls
+  expect "right"
+  let right ← parseVarDecls
+  let aux ← if ← accept "aux" then parseVarDecls else pure []
+  expect "end"
+  let _ ← accept "vars"
+  expectSemicolon
+  let spec ← if ← accept "spec" then do
+      let items ← parseItems .spec "end"
+      expect "end"
+      let _ ← accept "spec"
+      expectSemicolon
+      pure (some items)
+    else pure none
+  expect "def"
+  let mut defConstrs : List OPBConstr := []
+  while (← peek) != "end" do
+    -- VeriPB `single_constraint`: the `≥` part, or the `≤` part for `<=`
+    match ← parseRelConstr with
+    | c :: _ => defConstrs := defConstrs ++ [c]
+    | [] => pure ()
+  expect "end"
+  let _ ← accept "def"
+  expectSemicolon
+  let transitivity ← if ← accept "transitivity" then do
+      expect "vars"
+      expect "fresh_right"
+      let freshRight ← parseVarDecls
+      let (freshAux1, freshAux2) ← if ← accept "fresh_aux_1" then do
+          let a1 ← parseVarDecls
+          expect "fresh_aux_2"
+          let a2 ← parseVarDecls
+          pure (a1, a2)
+        else pure ([], [])
+      expect "end"
+      let _ ← accept "vars"
+      expectSemicolon
+      let proof ← parseOrderProof
+      expect "end"
+      let _ ← accept "transitivity"
+      expectSemicolon
+      pure (some { freshRight, freshAux1, freshAux2, proof : OrderTransitivity ProofStep })
+    else pure none
+  let reflexivity ← if ← accept "reflexivity" then do
+      let proof ← parseOrderProof
+      expect "end"
+      let _ ← accept "reflexivity"
+      expectSemicolon
+      pure (some proof)
+    else pure none
+  expect "end"
+  let _ ← accept "def_order"
+  expectSemicolon
+  return { name, left, right, aux, spec, defConstrs, transitivity, reflexivity }
+
 /-- Parse a single proof step. -/
-partial def parseStep : ParseM ProofStep := do
+partial def parseStep (ctx : StepCtx) : ParseM ProofStep := do
   let keyword ← next
   match keyword with
   | "f" =>
@@ -484,23 +955,90 @@ partial def parseStep : ParseM ProofStep := do
     return .pol ops
   | "rup" =>
     let constr ← parseOPBConstr
+    if ← accept ";" then return .rup constr []
     expect ":"
     let hints ← parseRupHints
     expectSemicolon
     return .rup constr hints
+  | "ia" =>
+    let constr ← parseOPBConstr
+    if ← accept ";" then return .ia constr none
+    expect ":"
+    let id ← parseNat
+    expectSemicolon
+    return .ia constr (some id)
   | "deld" =>
     let ids ← parseIdList
     expectSemicolon
     return .deld ids
   | "delc" =>
     let ids ← parseIdList
+    if ← accept ";" then return .delc ids
+    expect ":"
+    let (subst, endTok) ← withFresh parseWitness
+    if endTok == ";" then return .delcChecked ids subst none
+    expect "subproof"
+    let sp ← parseSubproof "delc"
+    return .delcChecked ids subst (some sp)
+  | "core" =>
+    match ← next with
+    | "id" =>
+      let ids ← parseIdList
+      expectSemicolon
+      return .core ids
+    | "range" =>
+      let lo ← parseNat
+      let hi ← parseNat
+      expectSemicolon
+      return .coreRange lo hi
+    | t => throw s!"core: expected 'id' or 'range', got '{t}'"
+  | "strengthening_to_core" =>
+    let on ← match ← next with
+      | "on" => pure true
+      | "off" => pure false
+      | t => throw s!"strengthening_to_core: expected 'on' or 'off', got '{t}'"
     expectSemicolon
-    return .delc ids
+    return .strengtheningToCore on
   | "output" =>
-    -- For PoC: only handle `output NONE ;`
-    expect "NONE"
-    expectSemicolon
-    return .output
+    let g ← next
+    if g == "NONE" then
+      expectSemicolon
+      return .output
+    let guarantee ← match g with
+      | "DERIVABLE" => pure OutputGuarantee.derivable
+      | "EQUISATISFIABLE" => pure .equisatisfiable
+      | "EQUIOPTIMAL" => pure .equioptimal
+      | _ => throw s!"unknown output guarantee: {g}"
+    match ← next with
+    | "FILE" =>
+      expectSemicolon
+      return .outputClaim guarantee .file
+    | "IMPLICIT" =>
+      expectSemicolon
+      return .outputClaim guarantee .implicit
+    | "PERMUTATION" =>
+      let ids ← parseIdList
+      expectSemicolon
+      return .outputClaim guarantee (.permutation ids)
+    | "CONSTRAINTS" =>
+      expect "opb"
+      let mut objective : Option ProofObjective := none
+      let mut isMax := false
+      let t ← peek
+      if t == "min:" || t == "max:" || t == "min" || t == "max" then
+        let _ ← next
+        isMax := t.startsWith "max"
+        if t == "min" || t == "max" then expect ":"
+        objective := some (← parseObjective)
+        expectSemicolon
+      let mut constrs : List OPBConstr := []
+      while (← peek) != "end" do
+        constrs := constrs ++ (← parseRelConstr)
+      expect "end"
+      let _ ← accept "opb"
+      expectSemicolon
+      return .outputClaim guarantee (.constraints objective isMax constrs)
+    | t => throw s!"unknown output type: {t}"
   | "conclusion" =>
     let kind ← next
     match kind with
@@ -510,122 +1048,138 @@ partial def parseStep : ParseM ProofStep := do
       expectSemicolon
       return .conclusion id
     | "SAT" =>
+      if ← accept ";" then return .conclusionSat none
       expect ":"
       let lits ← parseSolLits
       expectSemicolon
-      return .conclusionSat lits
+      -- `conclusion SAT : ;` has no hint (parser.rs `conclusion_sat`)
+      return .conclusionSat (if lits.isEmpty then none else some lits)
     | "BOUNDS" =>
-      let lb ← parseNat
-      -- Optional lower bound hint `: id`
-      let lbHint ← if (← peek) == ":" then do
-        let _ ← next
-        let id ← parseNat
-        pure (some id)
-      else pure none
-      let ub ← parseNat
-      -- Optional upper bound hint `: lits`
-      let ubLits ← if (← peek) == ":" then do
-        let _ ← next
-        parseSolLits
-      else pure []
+      let lb ← parseBound
+      let lbHint ← if ← accept ":" then some <$> parseNat else pure none
+      let ub ← parseBound
+      -- `ub : ;` has no hint (parser.rs `conclusion_bounds`)
+      let ubLits ← if ← accept ":" then do
+          let lits ← parseSolLits
+          pure (if lits.isEmpty then none else some lits)
+        else pure none
       expectSemicolon
       return .conclusionBounds lb lbHint ub ubLits
     | "NONE" =>
       expectSemicolon
-      return .output  -- Treat as no-op like output
+      return .conclusionNone
     | _ => throw s!"unknown conclusion type: {kind}"
-  | "sol" =>
-    let lits ← parseSolLits
+  | "sol" | "soli" =>
+    -- VeriPB adds unknown names of a logged solution as new variables
+    -- (`sol_common` → `literals` → `VarNameManager::add_by_name`).
+    let lits ← withFresh parseSolLits
+    let value ← if ← accept ":" then some <$> parseInt else pure none
     expectSemicolon
-    return .sol lits
-  | "soli" =>
-    let lits ← parseSolLits
+    return if keyword == "sol" then .sol lits value else .soli lits value
+  | "obji" =>
+    let v ← parseInt
     expectSemicolon
-    return .soli lits
+    return .obji v
+  | "eobj" =>
+    let obj ← parseObjective
+    expectSemicolon
+    return .eobj obj
+  | "obju" =>
+    let kind ← match ← next with
+      | "new" => pure ObjUpdateKind.new
+      | "diff" => pure .diff
+      | t => throw s!"obju: expected 'new' or 'diff', got '{t}'"
+    let obj ← parseObjective
+    if ← accept ";" then return .obju kind obj none
+    expect ":"
+    expect "subproof"
+    let sp ← parseSubproof "obju"
+    return .obju kind obj (some sp)
   | "pbc" =>
     let constr ← parseOPBConstr
     expect ":"
     expect "subproof"
-    -- Semicolon after 'subproof' is optional (VeriPB omits it)
-    if (← peek) == ";" then let _ ← next
-    -- Parse inner steps until "qed"
-    let mut innerSteps : Array ProofStep := #[]
-    while (← peek) != "qed" do
-      let step ← parseStep
-      innerSteps := innerSteps.push step
+    let _ ← accept ";"  -- semicolon after 'subproof' is optional
+    let innerSteps ← parseItems .subproof "qed"
     expect "qed"
+    let _ ← accept "pbc"
     expect ":"
     let resultId ← parseNat
     expectSemicolon
     return .pbc constr innerSteps resultId
   | "red" | "dom" =>
-    -- Parse constraint
-    let constr ← parseOPBConstr
-    -- Expect `:` separator before substitution
+    let rule := if keyword == "red" then StrengtheningRule.red else .dom
+    -- A name first seen in the constraint or the witness is a fresh
+    -- (extension) variable.
+    let constr ← withFresh parseOPBConstr
+    if ← accept ";" then return mkStrengthening rule constr [] none
     expect ":"
-    -- Parse substitution: pairs of `varName -> value` until `:` or `;`
-    let mut substPairs : List (String × String) := []
-    while (← peek) != ":" && (← peek) != ";" do
-      let varTok ← next
-      -- Check for `->` separator (VeriPB uses `->`)
-      if (← peek) == "->" then
-        let _ ← next  -- consume `->`
-        let valTok ← next
-        substPairs := (varTok, valTok) :: substPairs
-      else
-        -- VeriPB also allows `var val` without `->`
-        let valTok ← next
-        substPairs := (varTok, valTok) :: substPairs
-    substPairs := substPairs.reverse
-    -- Check if there is an explicit subproof
-    if (← peek) == ";" then
-      -- No subproof (all goals autoproved) — not supported in our checker
-      expectSemicolon
-      return .red constr substPairs #[]
-    else
-      -- Expect `:` then `subproof` or `begin`
-      expect ":"
-      let kw ← next
-      if kw != "subproof" && kw != "begin" then
-        throw s!"expected 'subproof' or 'begin' in red step, got '{kw}'"
-      -- Optional semicolon after subproof keyword
-      if (← peek) == ";" then let _ ← next
-      -- Parse proof goals until outer `qed`
-      let mut goals : Array (String × Array ProofStep × Nat) := #[]
-      while (← peek) != "qed" do
-        let goalKw ← next
-        if goalKw != "proofgoal" then
-          throw s!"expected 'proofgoal' in red subproof, got '{goalKw}'"
-        let goalId ← next  -- `#1` or a constraint ID number
-        -- Parse inner steps until `qed` (the proofgoal's qed)
-        let mut innerSteps : Array ProofStep := #[]
-        while (← peek) != "qed" && (← peek) != "end" do
-          let step ← parseStep
-          innerSteps := innerSteps.push step
-        -- Expect `qed` or `end` for this proofgoal
-        let endKw ← next
-        if endKw != "qed" && endKw != "end" then
-          throw s!"expected 'qed' or 'end' in proofgoal, got '{endKw}'"
-        -- Expect `:` then result ID
-        expect ":"
-        let resultId ← parseNat
-        -- Optional semicolon
-        if (← peek) == ";" then let _ ← next
-        goals := goals.push (goalId, innerSteps, resultId)
-      -- Consume the outer `qed`
-      expect "qed"
-      -- Optional semicolon after outer qed
-      if (← peek) == ";" then let _ ← next
-      return .red constr substPairs goals
-  | "ia" =>
-    throw ("unsupported proof step 'ia' (implication addition). " ++
-      "Run VeriPB with --elaborate to convert to kernel format first.")
+    let (subst, endTok) ← withFresh parseWitness
+    if endTok == ";" then return mkStrengthening rule constr subst none
+    let kw ← next
+    if kw != "subproof" && kw != "begin" then
+      throw s!"expected 'subproof' in {keyword} step, got '{kw}'"
+    let sp ← parseSubproof keyword
+    return mkStrengthening rule constr subst (some sp)
+  | "proofgoal" =>
+    if !(ctx == .subproof || ctx == .scope || ctx == .proof) then
+      throw "'proofgoal' outside a subproof"
+    let goalId ← next
+    let isHash := goalId.startsWith "#" && isDecDigits (goalId.drop 1).toString
+    if !isHash && !isDecDigits goalId then
+      throw s!"invalid proofgoal ID '{goalId}'"
+    let steps ← parseItems .proofgoal "qed"
+    expect "qed"
+    let _ ← accept goalId
+    let hint ← parseQedHint
+    return .proofgoal goalId steps hint
+  | "scope" =>
+    if ctx != .subproof then
+      throw "'scope' outside a subproof"
+    let kind ← match ← next with
+      | "leq" => pure ScopeKind.leq
+      | "geq" => pure .geq
+      | t => throw s!"scope: expected 'leq' or 'geq', got '{t}'"
+    let items ← parseItems .scope "end"
+    expect "end"
+    let _ ← accept "scope"
+    expectSemicolon
+    return .scope kind items
+  | "def_order" =>
+    let name ← next
+    return .defOrder (← parseDefOrder name)
+  | "load_order" =>
+    if ← accept ";" then return .loadOrder none []
+    let name ← next
+    let lits ← parseSolLits
+    expectSemicolon
+    return .loadOrder (some name) lits
   | other => throw s!"unknown proof step keyword: '{other}'"
 
-/-- Parse a complete VeriPB kernel proof from a string. -/
-def parseVeriPBProof (input : String) : Except String VeriPBProof := do
+end
+
+/-- Parse a complete VeriPB kernel proof. `vt` holds the input formula's
+named variables and variable count (see the module doc). -/
+def parseVeriPBProofWith (vt : VarTable) (input : String) :
+    Except String VeriPBProof := do
   let tokens := tokenize input
-  let initState : ParseState := ⟨tokens, 0⟩
+  -- Fresh names get indices above every `x<N>` of the proof, so that a name
+  -- declared early never takes the index of an `x<N>` that appears later.
+  -- A proof cannot introduce more variables than it has tokens, so every
+  -- index must be below `vt.numVars + tokens.size`; a larger `x<N>` would
+  -- only make the checker allocate arrays of that size.
+  let varBound := vt.numVars + tokens.size
+  let mut maxX := vt.numVars
+  for t in tokens do
+    -- 126 = '~', 120 = 'x'
+    let off := if byteAt t 0 == 126 then 1 else 0
+    if byteAt t off == 120 then
+      if let some i := canonXIndexAt? t off then
+        if i ≥ varBound then
+          throw s!"variable index of '{t}' too large (the proof has {tokens.size} tokens)"
+        maxX := max maxX (i + 1)
+  let initState : ParseState :=
+    { tokens, pos := 0, vars := { vt with numVars := maxX }, varBound }
   let parseAll : ParseM VeriPBProof := do
     expect "pseudo-Boolean"
     expect "proof"
@@ -633,16 +1187,21 @@ def parseVeriPBProof (input : String) : Except String VeriPBProof := do
     expect "3.0"
     let mut steps : Array ProofStep := #[]
     while (← peek) != "end" do
-      let step ← parseStep
+      let step ← parseStep .top
       steps := steps.push step
     expect "end"
     expect "pseudo-Boolean"
     expect "proof"
     expectSemicolon
-    return ⟨steps⟩
+    let s ← get
+    return { steps, numVars := s.vars.numVars, names := s.vars.toList }
   match parseAll initState with
   | .ok result _ => .ok result
-  | .error e _ => .error e
+  | .error e s => .error s!"{e} (at token {s.pos})"
+
+/-- Parse a proof whose formula has only `x<N>` variables. -/
+def parseVeriPBProof (input : String) : Except String VeriPBProof :=
+  parseVeriPBProofWith {} input
 
 -- Variable name mapping (for CNF → PB bridge)
 
@@ -671,34 +1230,7 @@ def opbConstrToPB (c : OPBConstr) : Except String Sat.PB.Constr := do
     return (t.coeff, lit)
   return ⟨terms, c.degree⟩
 
--- Proof checking state (data-level, no Expr yet)
-
-/-- Proof checking state. -/
-structure CheckState where
-  /-- Constraint database: maps ID → constraint. -/
-  db : Std.HashMap Nat Sat.PB.Constr
-  /-- Next constraint ID to assign. -/
-  nextId : Nat
-  /-- Number of input formula constraints. -/
-  formulaSize : Nat
-  /-- Number of variables. -/
-  numVars : Nat
-  /-- Logged solution (for SAT/BOUNDS conclusions). -/
-  solution : Option (Array Bool)
-  /-- Objective function (for optimization). -/
-  objective : Option Sat.PB.Constr
-  deriving Inhabited
-
-/-- Initialize checking state from parsed DIMACS clauses. -/
-def CheckState.fromDimacs (formula : DimacsFormula) : Except String CheckState := do
-  let init : Std.HashMap Nat Sat.PB.Constr × Nat := ({}, 1)
-  let result ← formula.clauses.toList.foldlM (init := init)
-    fun (db, nextId) clause => do
-    let constr ← dimacsClauseToPB clause
-    return (db.insert nextId constr, nextId + 1)
-  return ⟨result.1, result.2, formula.clauses.size, formula.numVars, none, none⟩
-
--- Pol RPN evaluator (data-level)
+-- Constraint operations (normalization, cutting planes) on `Sat.PB.Constr`
 
 /-- Merge like terms and remove zero-coefficient terms. -/
 def mergeLikeTerms (terms : List Sat.PB.Term) : List Sat.PB.Term :=
@@ -1028,43 +1560,6 @@ def evalConstrBool (asgn : Array Bool) (c : Sat.PB.Constr) : Bool :=
     acc + if evalLitBool asgn l then a else 0
   sum >= c.degree
 
-/-- Check if an assignment satisfies all constraints in the database. -/
-def checkSolution (asgn : Array Bool) (db : Std.HashMap Nat Sat.PB.Constr) : Bool :=
-  db.toList.all fun (_, c) => evalConstrBool asgn c
-
-/-- Check if an assignment satisfies only the original formula constraints
-    (IDs 1 to formulaSize). Used for SAT/BOUNDS where derived constraints
-    like objective improvement should not be checked. -/
-def checkSolutionOriginal (asgn : Array Bool) (db : Std.HashMap Nat Sat.PB.Constr)
-    (formulaSize : Nat) : Bool :=
-  db.toList.all fun (id, c) =>
-    if id <= formulaSize then evalConstrBool asgn c else true
-
-/-- Convert solution literals to an assignment array.
-    Returns array where asgn[i] = true iff x(i+1) is in the positive literals.
-    Tracks which variables have been set to detect conflicting assignments. -/
-def solLitsToAssignment (lits : List OPBLit) (numVars : Nat) :
-    Except String (Array Bool) := do
-  let mut asgn : Array Bool := .replicate numVars false
-  let mut seen : Array Bool := .replicate numVars false
-  for lit in lits do
-    let (isPos, name) := match lit with
-      | .pos n => (true, n)
-      | .neg n => (false, n)
-    if !name.startsWith "x" then
-      throw s!"invalid variable in solution: {name}"
-    match (name.drop 1).toString.toNat? with
-    | some idx =>
-      if idx == 0 then throw "variable index must be > 0"
-      if idx > numVars then throw s!"variable x{idx} exceeds numVars {numVars}"
-      let i := idx - 1
-      if seen[i]! && asgn[i]! != isPos then
-        throw s!"conflicting assignment for variable x{idx}"
-      asgn := asgn.set! i isPos
-      seen := seen.set! i true
-    | none => throw s!"invalid variable name: {name}"
-  return asgn
-
 /-- Evaluate the objective function on an assignment. -/
 def evalObjective (asgn : Array Bool) (obj : Sat.PB.Constr) : Nat :=
   obj.terms.foldl (init := 0) fun acc (a, l) =>
@@ -1157,41 +1652,6 @@ def findConflictHint (negConstr : Sat.PB.Constr)
   | some idx => .ok idx
   | none => .error "RUP: propagation did not reach conflict"
 
-/-- RUP verification: find conflict via propagation, then verify
-    via multiply-add-normalize starting from the conflict hint. -/
-def verifyRup (negConstr : Sat.PB.Constr)
-    (hints : List RupHint) (db : Std.HashMap Nat Sat.PB.Constr)
-    (numVars : Nat) : Except String Sat.PB.Constr := do
-  if hints.isEmpty then throw "RUP: no hints provided"
-  let getHint (h : RupHint) : Except String Sat.PB.Constr :=
-    match h with
-    | .negC => .ok negConstr
-    | .id n => match db[n]? with
-      | some c => .ok c
-      | none => .error s!"RUP: hint {n} not in database"
-  -- Find the conflicting hint via propagation
-  let conflictIdx ← findConflictHint negConstr hints (db[·]?) numVars
-  let conflictHint := hints[conflictIdx]!
-  -- Start accumulator from the conflict hint
-  let conflictC ← getHint conflictHint
-  let mut acc := normalizeConstr conflictC
-  -- Add all other hints (the assignment hints) one by one
-  for i in List.range hints.length do
-    if acc.isContra then break
-    if i == conflictIdx then continue
-    let hintC ← getHint hints[i]!
-    match findCompLitPair acc hintC with
-    | some (ca, ch, _) =>
-      let accM := if ch == 1 then acc else mulConstr acc ch
-      let hintM := if ca == 1 then hintC else mulConstr hintC ca
-      acc := normalizeConstr (addConstrs accM hintM)
-    | none =>
-      acc := normalizeConstr (addConstrs acc hintC)
-  if !acc.isContra then
-    throw s!"RUP: not contradictory after processing hints \
-      (coeffSum={acc.coeffSum}, degree={acc.degree})"
-  .ok acc
-
 -- Pol RPN evaluator with mixed stack
 
 /-- RPN stack element: either a constraint or a raw integer. -/
@@ -1199,274 +1659,6 @@ inductive StackElem where
   | constr : Sat.PB.Constr → StackElem
   | nat : Nat → StackElem
   deriving Repr
-
-/-- Execute the pol RPN sequence with a mixed stack. -/
-def execPolRPN (ops : List PolOp) (db : Std.HashMap Nat Sat.PB.Constr) :
-    Except String Sat.PB.Constr := do
-  let execOne (stack : List StackElem) (op : PolOp) : Except String (List StackElem) :=
-    match op with
-    | .pushId id =>
-      match db[id]? with
-      | some c => .ok (.constr c :: stack)
-      | none => .error s!"constraint ID {id} not in database"
-    | .pushNat n => .ok (.nat n :: stack)
-    | .pushLitAxiom lit => do
-      let pbLit ← opbLitToPB lit
-      .ok (.constr ⟨[(1, pbLit)], 0⟩ :: stack)
-    | .add =>
-      match stack with
-      | .constr c2 :: .constr c1 :: rest => .ok (.constr (addConstrs c1 c2) :: rest)
-      | _ => .error "pol +: need two constraints on stack"
-    | .mul =>
-      match stack with
-      | .nat k :: .constr c :: rest =>
-        -- k=0 is valid: zeroes out the constraint (useful for masking terms)
-        .ok (.constr (mulConstr c k) :: rest)
-      | _ => .error "pol *: need integer on top of constraint on stack"
-    | .div =>
-      match stack with
-      | .nat k :: .constr c :: rest =>
-        if k == 0 then .error "pol d: divisor must be positive"
-        else
-          -- VeriPB normalizes before division (cancel complementary pairs first)
-          let normalized := normalizeConstr c
-          .ok (.constr (divConstr normalized k) :: rest)
-      | _ => .error "pol d: need integer on top of constraint on stack"
-    | .saturate =>
-      match stack with
-      | .constr c :: rest =>
-        -- VeriPB normalizes before saturation (cancel complementary pairs first)
-        let normalized := normalizeConstr c
-        .ok (.constr (saturateConstr normalized) :: rest)
-      | _ => .error "pol s: need constraint on stack"
-    | .weaken varName =>
-      match stack with
-      | .constr c :: rest => do
-        let varIdx ← if varName.startsWith "x" then
-          match (varName.drop 1).toString.toNat? with
-          | some n => if n > 0 then pure (n - 1) else .error "variable index must be > 0"
-          | none => .error s!"invalid variable in weaken: {varName}"
-        else
-          .error s!"expected variable name starting with 'x', got: {varName}"
-        -- VeriPB weakens the normalized constraint
-        .ok (.constr (weakenConstr (normalizeConstr c) varIdx) :: rest)
-      | _ => .error "pol w: need constraint on stack"
-  let finalStack ← ops.foldlM (init := ([] : List StackElem)) execOne
-  match finalStack with
-  | [.constr c] => .ok c
-  | [.nat _] => .error "pol: stack ends with integer, not constraint"
-  | [] => .error "pol: empty stack at end"
-  | _ => .error s!"pol: stack has {finalStack.length} elements at end, expected 1"
-
--- Proof step executor (data-level checking)
-
-/-- Compare two normalized constraints by sorting terms. -/
-private def constrMatchNorm (c1 c2 : Sat.PB.Constr) : Bool :=
-  c1.degree == c2.degree && c1.terms.length == c2.terms.length &&
-  let sort := fun (ts : List Sat.PB.Term) =>
-    ts.mergeSort fun a b =>
-      Sat.PB.Literal.var a.2 < Sat.PB.Literal.var b.2 ||
-      (Sat.PB.Literal.var a.2 == Sat.PB.Literal.var b.2 &&
-       match a.2, b.2 with
-       | .pos _, .neg _ => true
-       | _, _ => false)
-  sort c1.terms == sort c2.terms
-
-mutual
-/-- Execute a single proof step, updating the check state. -/
-partial def execStep (state : CheckState) (step : ProofStep) : Except String CheckState :=
-  match step with
-  | .formulaSize n =>
-    if state.formulaSize != n then
-      throw s!"formula size mismatch: CNF has {state.formulaSize} clauses, proof declares {n}"
-    else
-      .ok state
-  | .pol ops => do
-    let result ← execPolRPN ops state.db
-    let newDb := state.db.insert state.nextId (normalizeConstr result)
-    .ok { state with db := newDb, nextId := state.nextId + 1 }
-  | .rup constr hints => do
-    let pbConstr ← opbConstrToPB constr
-    let cs := pbConstr.coeffSum
-    if pbConstr.degree > cs then
-      throw s!"RUP: target degree {pbConstr.degree} > coeffSum {cs}"
-    let negConstr := pbConstr.negate
-    let _ ← verifyRup negConstr hints state.db state.numVars
-    let newDb := state.db.insert state.nextId (normalizeConstr pbConstr)
-    .ok { state with db := newDb, nextId := state.nextId + 1 }
-  | .pbc constr innerSteps resultId => do
-    if innerSteps.any (fun s => match s with
-        | .conclusion _ | .output => true | _ => false) then
-      throw "pbc subproof contains 'conclusion' or 'output' step"
-    let pbConstr ← opbConstrToPB constr
-    let cs := pbConstr.coeffSum
-    if pbConstr.degree > cs then
-      throw s!"pbc: target degree {pbConstr.degree} > coeffSum {cs}"
-    -- Save DB snapshot, add negated constraint
-    let savedDb := state.db
-    let negConstr := pbConstr.negate
-    let negId := state.nextId
-    let dbWithNeg := state.db.insert negId negConstr
-    let subState : CheckState :=
-      { state with db := dbWithNeg, nextId := negId + 1 }
-    -- Execute inner steps
-    let finalSub ← execAllSteps subState innerSteps
-    -- The qed constraint (resultId) must be contradictory
-    match finalSub.db[resultId]? with
-    | some c =>
-      if c.isContra then pure ()
-      else throw s!"pbc qed: constraint {resultId} is not contradictory \
-        (coeffSum={c.coeffSum}, degree={c.degree})"
-    | none => throw s!"pbc qed: constraint {resultId} not in database"
-    -- Restore DB, register the derived constraint
-    let restoredDb := savedDb.insert finalSub.nextId (normalizeConstr pbConstr)
-    .ok { state with db := restoredDb, nextId := finalSub.nextId + 1 }
-  | .red constr substPairs goals => do
-    let pbConstr ← opbConstrToPB constr
-    let cs := pbConstr.coeffSum
-    if pbConstr.degree > cs then
-      throw s!"red: target degree {pbConstr.degree} > coeffSum {cs}"
-    -- Convert substitution pairs to kernel-level SubstVal
-    let subst ← parseSubstPairs substPairs state.numVars
-    -- Save DB snapshot, add negated constraint
-    let savedDb := state.db
-    -- Coverage check: must have '#' goal and all affected constraints covered
-    let hasHashGoal := goals.any fun (gid, _, _) => gid.startsWith "#"
-    if !hasHashGoal then
-      throw "red: missing '#' goal for the new constraint"
-    let goalIds := goals.toList.filterMap fun (gid, _, _) =>
-      if gid.startsWith "#" then none else gid.toNat?
-    for (id, c) in savedDb.toList do
-      if Sat.PB.termsAffected subst c.terms then
-        let nc := normalizeConstr (Sat.PB.applySubstConstr subst c)
-        let autoSat := savedDb.toList.any fun (_, dbC) =>
-          constrMatchNorm nc (normalizeConstr dbC)
-        let covered := goalIds.contains id || autoSat
-        if !covered then
-          throw s!"red: affected constraint {id} not covered by goals or auto-satisfied"
-    let negConstr := pbConstr.negate
-    let negId := state.nextId
-    let redDb := state.db.insert negId negConstr
-    -- Process each proof goal
-    let mut nextId := negId + 1
-    for (goalId, innerSteps, resultId) in goals do
-      -- Determine the goal constraint: apply substitution
-      let goalConstr ← if goalId.startsWith "#" then
-        -- proofgoal #N: refers to the new constraint C itself
-        pure (Sat.PB.applySubstConstr subst pbConstr)
-      else match goalId.toNat? with
-      | some dbId =>
-        match savedDb[dbId]? with
-        | some c => pure (Sat.PB.applySubstConstr subst c)
-        | none => throw s!"red proofgoal {goalId}: constraint not in database"
-      | none => throw s!"red proofgoal: invalid goal ID '{goalId}'"
-      -- Reject unsatisfiable goal constraints (negate requires degree ≤ coeffSum)
-      if goalConstr.degree > goalConstr.coeffSum then
-        throw s!"red proofgoal {goalId}: goal degree {goalConstr.degree} > \
-          coeffSum {goalConstr.coeffSum}"
-      -- Add negated goal constraint to the red context DB
-      let goalNeg := Sat.PB.Constr.negate goalConstr
-      let goalDb := redDb.insert nextId goalNeg
-      let subState : CheckState :=
-        { state with db := goalDb, nextId := nextId + 1 }
-      -- Execute inner steps for this proof goal
-      let finalSub ← execAllSteps subState innerSteps
-      -- Check that the result is contradictory
-      match finalSub.db[resultId]? with
-      | some c =>
-        if c.isContra then pure ()
-        else throw s!"red proofgoal {goalId}: result {resultId} not contradictory"
-      | none => throw s!"red proofgoal {goalId}: result {resultId} not in database"
-      nextId := finalSub.nextId
-    -- All goals passed: add the derived constraint
-    let restoredDb := savedDb.insert nextId (normalizeConstr pbConstr)
-    .ok { state with db := restoredDb, nextId := nextId + 1 }
-  | .deld ids =>
-    let db := ids.foldl (init := state.db) fun db id => db.erase id
-    .ok { state with db := db }
-  | .delc ids =>
-    let db := ids.foldl (init := state.db) fun db id => db.erase id
-    .ok { state with db := db }
-  | .output => .ok state
-  | .conclusion id =>
-    match state.db[id]? with
-    | some c =>
-      if c.isContra then
-        .ok state  -- Contradiction found!
-      else
-        throw s!"conclusion constraint {id} is not contradictory \
-          (coeffSum={c.coeffSum}, degree={c.degree})"
-    | none => throw s!"conclusion constraint ID {id} not in database"
-  | .sol lits => do
-    let asgn ← solLitsToAssignment lits state.numVars
-    if !checkSolution asgn state.db then
-      throw "sol: assignment does not satisfy all constraints"
-    .ok { state with solution := some asgn }
-  | .soli lits => do
-    let asgn ← solLitsToAssignment lits state.numVars
-    if !checkSolution asgn state.db then
-      throw "soli: assignment does not satisfy all constraints"
-    -- Add objective improvement constraint: f(x) <= f(rho) - 1
-    -- In >= form: sum of (coeff * ~lit) >= (W - f(rho) + 1)
-    -- where W = sum of all coefficients, f(rho) = objective value at solution
-    match state.objective with
-    | some obj =>
-      let W := obj.terms.foldl (init := 0) fun acc (a, _) => acc + a
-      let fRho := evalObjective asgn obj
-      -- Negate each literal and compute new degree
-      let negTerms := obj.terms.map fun (a, l) => (a, l.negate)
-      let newDegree := W - fRho + 1
-      let improvementConstr : Sat.PB.Constr := ⟨negTerms, newDegree⟩
-      let newDb := state.db.insert state.nextId improvementConstr
-      .ok { state with db := newDb, nextId := state.nextId + 1, solution := some asgn }
-    | none =>
-      -- No objective, just store solution
-      .ok { state with solution := some asgn }
-  | .conclusionSat lits => do
-    -- Verify the explicit solution satisfies all constraints
-    let asgn ← solLitsToAssignment lits state.numVars
-    if !checkSolution asgn state.db then
-      throw "conclusion SAT: assignment does not satisfy all constraints"
-    .ok state
-  | .conclusionBounds _lb lbHint ub ubLits => do
-    -- Verify lower bound: constraint at lbHint implies objective >= lb
-    match lbHint with
-    | some id =>
-      match state.db[id]? with
-      | some c =>
-        if !c.isContra then
-          throw s!"conclusion BOUNDS: lower bound constraint {id} is not contradictory"
-      | none => throw s!"conclusion BOUNDS: constraint ID {id} not in database"
-    | none => pure () -- No hint, trust the proof
-    -- Verify upper bound: solution achieves objective <= ub
-    -- Check against original formula constraints only (not derived constraints)
-    if !ubLits.isEmpty then do
-      let asgn ← solLitsToAssignment ubLits state.numVars
-      if !checkSolutionOriginal asgn state.db state.formulaSize then
-        throw "conclusion BOUNDS: upper bound solution does not satisfy constraints"
-      -- Optionally verify objective value matches claimed upper bound
-      match state.objective with
-      | some obj =>
-        let objVal := evalObjective asgn obj
-        if objVal > ub then
-          throw s!"conclusion BOUNDS: solution objective {objVal} > claimed UB {ub}"
-      | none => pure ()
-    .ok state
-
-/-- Execute all proof steps. -/
-partial def execAllSteps (state : CheckState) (steps : Array ProofStep) :
-    Except String CheckState :=
-  steps.toList.foldlM (init := state) fun s step => execStep s step
-end
-
-/-- Verify a VeriPB proof against a DIMACS formula (data-level check).
-    Returns Ok if the proof is valid, Error with message otherwise. -/
-def verifyProof (cnf : String) (proof : String) : Except String Unit := do
-  let formula ← parseDimacs cnf
-  let proofData ← parseVeriPBProof proof
-  let initState ← CheckState.fromDimacs formula
-  let _finalState ← execAllSteps initState proofData.steps
-  return ()
 
 -- Metaprogram layer: Expr-level proof construction
 
@@ -1937,6 +2129,10 @@ def buildPolProof (ops : List PolOp) (db : Std.HashMap Nat StoredConstr)
         let (newConstr, proof) := buildWeakenVar varIdx ctx normC.terms.length normC normP
         .ok (.constr ⟨newConstr, buildConstrExpr newConstr, proof⟩ :: rest)
       | _ => .error "pol w: need constraint on stack"
+    | .lowerRhs => .error "unsupported in veripb_proof: pol operation '-'"
+    | .divVar => .error "unsupported in veripb_proof: pol operation 'c'"
+    | .mir => .error "unsupported in veripb_proof: pol operation 'n'"
+    | .mirVar => .error "unsupported in veripb_proof: pol operation 'm'"
   let finalStack ← ops.foldlM (init := ([] : List MetaStackElem)) execOne
   match finalStack with
   | [.constr sc] =>
@@ -2108,10 +2304,28 @@ partial def execInnerSteps (db : Std.HashMap Nat StoredConstr)
       for id in ids do db := db.erase id
     | .output => pure ()
     | .conclusion _ => pure ()  -- handled by caller
-    | .sol _ => pure ()  -- solution logging ignored in subproofs
-    | .soli _ => pure ()  -- solution logging ignored in subproofs
+    -- `sol` adds no constraint and its solution does not affect an
+    -- unsatisfiability proof, so it is skipped (unchecked)
+    | .sol _ _ => pure ()
+    -- `soli` adds the objective-improving constraint under a new ID, which
+    -- this path cannot build; skipping it would shift every later ID
+    | .soli _ _ => throw "unsupported in veripb_proof: soli"
     | .conclusionSat _ => pure ()  -- conclusions handled by caller
     | .conclusionBounds _ _ _ _ => pure ()  -- conclusions handled by caller
+    | .ia .. => throw "unsupported in veripb_proof: ia"
+    | .delcChecked .. => throw "unsupported in veripb_proof: checked delc"
+    | .core .. | .coreRange .. => throw "unsupported in veripb_proof: core"
+    | .strengtheningToCore _ =>
+      throw "unsupported in veripb_proof: strengthening_to_core"
+    | .dom .. | .strengthening .. => throw "unsupported in veripb_proof: dom/red"
+    | .proofgoal .. | .scope .. =>
+      throw "unsupported in veripb_proof: proofgoal/scope outside red"
+    | .defOrder _ | .loadOrder .. =>
+      throw "unsupported in veripb_proof: def_order/load_order"
+    | .obji _ | .eobj _ | .obju .. =>
+      throw "unsupported in veripb_proof: obji/eobj/obju"
+    | .outputClaim .. => throw "unsupported in veripb_proof: output claim"
+    | .conclusionNone => throw "unsupported in veripb_proof: conclusion NONE"
   return (db, nextId)
 where
   /-- Build a pbc subproof step. Returns StoredConstr for the derived
@@ -2372,7 +2586,7 @@ def fromVeriPBAux (cnf proof : String) (name : Name) :
   }
   let ctx := mkConst ctxName
   -- Parse VeriPB proof
-  let proofData ← match parseVeriPBProof proof with
+  let proofData ← match parseVeriPBProofWith { numVars := formula.numVars } proof with
     | .ok p => pure p
     | .error e => throwError "VeriPB parse error: {e}"
   -- Build the proof
@@ -2463,7 +2677,8 @@ elab "from_veripb_file " cnfPath:str ppSpace proofPath:str : term <= expectedTyp
     Skips CNF parsing and reification — caller provides the constraints.
     Adds auxiliary declarations to the environment. -/
 def fromVeriPBDirect (constrs : Array Sat.PB.Constr) (numVars : Nat)
-    (proofStr : String) (name : Name) : MetaM (Expr × Expr × Expr) := do
+    (proofStr : String) (name : Name) (vt : VarTable := {}) :
+    MetaM (Expr × Expr × Expr) := do
   if constrs.isEmpty then throwError "empty constraint array"
   -- Build formula expression (balanced tree)
   let ctx' ← match buildConj constrs 0 constrs.size with
@@ -2481,7 +2696,8 @@ def fromVeriPBDirect (constrs : Array Sat.PB.Constr) (numVars : Nat)
   }
   let ctx := mkConst ctxName
   -- Parse VeriPB proof
-  let proofData ← match parseVeriPBProof proofStr with
+  let proofData ← match parseVeriPBProofWith
+      { vt with numVars := max vt.numVars numVars } proofStr with
     | .ok p => pure p
     | .error e => throwError "VeriPB parse error: {e}"
   -- Build the proof
@@ -2501,100 +2717,209 @@ def fromVeriPBDirect (constrs : Array Sat.PB.Constr) (numVars : Nat)
     return (ctx, ctx', mkConst proofName)
   | .error e => throwError "proof construction failed: {e}"
 
+
 -- OPB file parsing for native PB instances
 
-/-- Parse `coeff var` pairs. A negative coefficient `-a·l` is stored as
-`a·¬l` and contributes `a` to the returned degree adjustment
-(`-a·l ≡ a·¬l - a`). Returns terms, max variable seen, degree adjustment. -/
-private def parseOPBTerms : List String → Nat →
-    Except String (List Sat.PB.Term × Nat × Nat)
-  | [], maxVar => .ok ([], maxVar, 0)
-  | [_], mv => .ok ([], mv, 0) -- odd token count, ignore trailing
-  | coeffStr :: varStr :: rest, maxVar => do
-    let coeffI ← match parseCoeffInt coeffStr with
-      | .ok c => .ok c
-      | .error _ => .error s!"OPB parse: bad coeff '{coeffStr}'"
-    let (neg, varName) := if varStr.startsWith "~" then
-      (true, (varStr.drop 1).toString)
-    else (false, varStr)
-    let varNum ← match (varName.drop 1).toString.toNat? with
-      | some n => if n == 0 then .error s!"OPB parse: variable index 0 invalid: '{varStr}'"
-                  else .ok n
-      | none => .error s!"OPB parse: bad var '{varStr}'"
-    let varIdx := varNum - 1
-    let mv := if varNum > maxVar then varNum else maxVar
-    let (coeff, neg, adj) :=
-      if coeffI ≥ 0 then (coeffI.toNat, neg, 0)
-      else ((-coeffI).toNat, !neg, (-coeffI).toNat)
-    let lit := if neg then Sat.PB.Literal.neg varIdx
-               else Sat.PB.Literal.pos varIdx
-    let (restTerms, mv', adj') ← parseOPBTerms rest mv
-    .ok ((coeff, lit) :: restTerms, mv', adj + adj')
+/-- An OPB objective in minimization form with nonnegative coefficients:
+`f = Σ coeff·lit + offset`. A `max:` objective is negated first, as VeriPB
+does (`PBObjective::from_terms` with `is_maximization`), and a negative
+coefficient `-a·l` becomes `a·¬l` with `-a` added to the offset. -/
+structure OPBObjective where
+  terms : List Sat.PB.Term
+  offset : Int
+  /-- The file had `max:` (the objective above is the negated one). -/
+  fromMax : Bool := false
+  deriving Repr
 
-/-- Parse one OPB constraint line. Returns constraint and max var seen.
-A negative right-hand side is clamped to `0` after the adjustment for
-negative coefficients (a constraint `Σ ≥ d` with `d ≤ 0` over a
-nonnegative sum is equivalent to `Σ ≥ 0`). -/
-private def parseOPBLine (line : String) :
-    Except String (Sat.PB.Constr × Nat) := do
-  let parts := line.splitOn ";"
-  let constrStr := (parts[0]!).trimAscii.toString
-  let geqParts := constrStr.splitOn ">="
-  if geqParts.length < 2 then
-    .error s!"OPB parse: no >= in line: {line}"
-  else
-    let lhs := (geqParts[0]!).trimAscii.toString
-    let rhs := (geqParts[1]!).trimAscii.toString
-    let degreeI ← match parseCoeffInt rhs with
-      | .ok d => .ok d
-      | .error _ => .error s!"OPB parse: bad degree '{rhs}'"
-    let tokens := lhs.splitOn " " |>.filter (!·.isEmpty)
-    let (terms, maxVar, adj) ← parseOPBTerms tokens 0
-    .ok (⟨terms, (degreeI + adj).toNat⟩, maxVar)
+/-- A parsed OPB file. `names` lists the variables not written `x<N>` with
+their indices. -/
+structure OPBInstance where
+  numVars : Nat
+  constrs : Array Sat.PB.Constr
+  objective : Option OPBObjective
+  names : List (String × Nat)
+  deriving Repr
 
-/-- Parse an objective line (min: or max:) into a constraint with degree 0.
-    The constraint represents the objective function sum. -/
-private def parseOPBObjective (line : String) : Except String Sat.PB.Constr := do
-  let stripped := if line.startsWith "min:" then (line.drop 4).toString
-                  else if line.startsWith "max:" then (line.drop 4).toString
-                  else line
-  let cleaned := (stripped.splitOn ";" |>.head!).trimAscii.toString
-  let tokens := cleaned.splitOn " " |>.filter (!·.isEmpty)
-  let (terms, _) ← parseOPBTerms tokens 0
-  .ok ⟨terms, 0⟩
+/-- End-of-line marker in the OPB token stream. -/
+private def opbEOL : String := "\n"
 
-/-- Parse an OPB file into constraints, variable count, and optional objective.
-    Supports the subset of OPB used by RoundingSat:
-    header line starting with `*`, constraint lines with terms and `>=`.
-    Returns `(numVars, constraints, objective?)`. -/
+/-- Tokens of an OPB file: whitespace-separated, `;` on its own, a leading
+relation (`>=`, `<=`, `=`) split off its number, `*` lines skipped, and
+`opbEOL` after the tokens of every nonempty line (VeriPB reads one statement
+per line). -/
+private def opbTokens (s : String) : Array String := Id.run do
+  let mut toks : Array String := #[]
+  for line in s.splitOn "\n" do
+    let t := line.trimAscii.toString
+    if t.isEmpty || t.startsWith "*" then continue
+    for w in ((t.replace ";" " ; ").replace "\t" " ").splitOn " " do
+      let w := w.trimAscii.toString
+      if w.isEmpty then continue
+      let rel := if w.startsWith ">=" then ">=" else if w.startsWith "<=" then "<="
+        else if w.startsWith "=" then "=" else ""
+      if !rel.isEmpty && w.length > rel.length then
+        toks := toks.push rel
+        toks := toks.push (w.drop rel.length).toString
+      else
+        toks := toks.push w
+    toks := toks.push opbEOL
+  return toks
+
+/-- Byte `b` may occur after the first character of an OPB variable
+(`[_a-zA-Z0-9\-^\[\]{}]`). -/
+@[inline] private def opbVarByte (b : UInt8) : Bool :=
+  (b ≥ 97 && b ≤ 122) || (b ≥ 65 && b ≤ 90) || (b ≥ 48 && b ≤ 57) ||
+  b == 95 || b == 45 || b == 94 || b == 91 || b == 93 || b == 123 || b == 125
+
+/-- `s` without its first `k` bytes is an OPB variable: VeriPB's `Var`
+token `[a-zA-Z_][_a-zA-Z0-9\-^\[\]{}]+` (`opb_token.rs`). -/
+private def opbVarAt (s : String) (k : Nat) : Bool := Id.run do
+  let n := s.utf8ByteSize
+  if k + 2 > n then return false
+  let b := byteAt s k
+  if !((b ≥ 97 && b ≤ 122) || (b ≥ 65 && b ≤ 90) || b == 95) then return false
+  for i in [k + 1:n] do
+    if !opbVarByte (byteAt s i) then return false
+  return true
+
+/-- Is an OPB token a literal (`name` or `~name`)? -/
+private def opbIsLit (w : String) : Bool :=
+  -- 126 = '~'
+  opbVarAt w (if byteAt w 0 == 126 then 1 else 0)
+
+/-- Is an OPB token a label `@[a-zA-Z0-9_^\[\]{}]+` (`opb_token.rs`)? -/
+private def opbIsLabel (w : String) : Bool := Id.run do
+  let n := w.utf8ByteSize
+  -- 64 = '@'
+  if n < 2 || byteAt w 0 != 64 then return false
+  for i in [1:n] do
+    let b := byteAt w i
+    if !(opbVarByte b && b != 45) then return false
+  return true
+
+/-- Normalize `Σ cᵢ·lᵢ` (integer coefficients) to nonnegative coefficients;
+returns the terms and the sum of the negative coefficients. -/
+private def normIntTerms (terms : List (Int × Sat.PB.Literal)) :
+    List Sat.PB.Term × Int :=
+  let (ts, adj) := terms.foldl (init := (([] : List Sat.PB.Term), (0 : Int)))
+    fun (acc, adj) (c, l) =>
+      if c ≥ 0 then ((c.toNat, l) :: acc, adj)
+      else (((-c).toNat, l.negate) :: acc, adj + c)
+  (ts.reverse, adj)
+
+/-- Parse an OPB file (PB competition format, as VeriPB's `opb_parser.rs`):
+`*` comment lines, an optional `min:`/`max:` objective with an optional
+constant, constraints with `>=`, `<=` or `=` (an `=` constraint becomes its
+`≥` part followed by its `≤` part, which keeps VeriPB's constraint IDs),
+optional `@label` prefixes, and variable names matching VeriPB's `Var`
+token (see the module doc for the index assignment). Integers are
+`[+-]?[0-9]+`. Each statement is on one line of its own and ends with `;`;
+any other token is a parse error. A negative right-hand side is clamped to
+`0` after the adjustment for negative coefficients. -/
+def parseOPBNamed (s : String) : Except String OPBInstance := do
+  let toks := opbTokens s
+  -- Pass 1: largest x<N> index, then named variables in order of appearance.
+  let mut maxX := 0
+  for w in toks do
+    if opbIsLit w then
+      let v := if w.startsWith "~" then (w.drop 1).toString else w
+      if let some i := canonXIndex? v then maxX := max maxX (i + 1)
+  let mut names : Std.HashMap String Nat := {}
+  let mut order : Array (String × Nat) := #[]
+  let mut nv := maxX
+  for w in toks do
+    if opbIsLit w then
+      let v := if w.startsWith "~" then (w.drop 1).toString else w
+      if (canonXIndex? v).isNone && !names.contains v then
+        names := names.insert v nv
+        order := order.push (v, nv)
+        nv := nv + 1
+  let lit (w : String) : Except String Sat.PB.Literal := do
+    if w == opbEOL then throw "OPB parse: statement ends before ';'"
+    if !opbIsLit w then throw s!"OPB parse: expected a literal, got '{w}'"
+    let (neg, v) := if w.startsWith "~" then (true, (w.drop 1).toString) else (false, w)
+    let i ← match canonXIndex? v with
+      | some i => pure i
+      | none => match names[v]? with
+        | some i => pure i
+        | none => throw s!"OPB parse: bad var '{w}'"
+    return if neg then .neg i else .pos i
+  let int (w : String) : Except String Int :=
+    if w == opbEOL then .error "OPB parse: statement ends before ';'"
+    else match parseCoeffInt w with
+    | .ok c => .ok c
+    | .error _ => .error s!"OPB parse: bad coeff '{w}'"
+  -- a statement ends with `;` and the end of its line
+  let endStmt (pos : Nat) : Except String Unit := do
+    let t := toks.getD pos opbEOL
+    if t != ";" then
+      throw s!"OPB parse: expected ';', got '{if t == opbEOL then "end of line" else t}'"
+    if toks.getD (pos + 1) opbEOL != opbEOL then
+      throw s!"OPB parse: more than one statement on a line \
+        (unexpected '{toks.getD (pos + 1) ""}' after ';')"
+  -- Pass 2: statements, one per line.
+  let mut pos := 0
+  let mut constrs : Array Sat.PB.Constr := #[]
+  let mut objective : Option OPBObjective := none
+  let n := toks.size
+  while pos < n do
+    let w := toks[pos]!
+    if w == "min:" || w == "max:" then
+      let isMax := w == "max:"
+      pos := pos + 1
+      let mut terms : List (Int × Sat.PB.Literal) := []
+      let mut constant : Int := 0
+      while toks.getD pos ";" != ";" do
+        let c ← int toks[pos]!
+        pos := pos + 1
+        let t := toks.getD pos ";"
+        if t == ";" then constant := c
+        else
+          terms := (c, ← lit t) :: terms
+          pos := pos + 1
+      endStmt pos
+      pos := pos + 2
+      let sgn : Int := if isMax then -1 else 1
+      let (ts, adj) := normIntTerms (terms.reverse.map fun (c, l) => (sgn * c, l))
+      objective := some { terms := ts, offset := sgn * constant + adj, fromMax := isMax }
+    else
+      if w.startsWith "@" then
+        if !opbIsLabel w then throw s!"OPB parse: bad label '{w}'"
+        pos := pos + 1
+      let mut terms : List (Int × Sat.PB.Literal) := []
+      while !([">=", "<=", "="].contains (toks.getD pos ">=")) do
+        let c ← int toks[pos]!
+        let l ← lit (toks.getD (pos + 1) "")
+        terms := (c, l) :: terms
+        pos := pos + 2
+      let rel := toks.getD pos ""
+      let d ← int (toks.getD (pos + 1) "")
+      endStmt (pos + 2)
+      pos := pos + 4
+      let fwd := terms.reverse
+      let geq : Sat.PB.Constr :=
+        let (ts, adj) := normIntTerms fwd
+        ⟨ts, (d - adj).toNat⟩
+      let leq : Sat.PB.Constr :=
+        let (ts, adj) := normIntTerms (fwd.map fun (c, l) => (-c, l))
+        ⟨ts, (-d - adj).toNat⟩
+      if rel == ">=" then constrs := constrs.push geq
+      else if rel == "<=" then constrs := constrs.push leq
+      else constrs := (constrs.push geq).push leq
+  return { numVars := nv, constrs, objective, names := order.toList }
+
+/-- Parse an OPB file into variable count, constraints and objective
+(nonnegative literal terms plus an integer offset). -/
 def parseOPBWithObj (s : String) :
-    Except String (Nat × Array Sat.PB.Constr × Option Sat.PB.Constr) := do
-  let allLines := s.splitOn "\n"
-  -- Extract objective if present
-  let objLine := allLines.find? fun l =>
-    let t := l.trimAscii.toString
-    t.startsWith "min:" || t.startsWith "max:"
-  let objective ← match objLine with
-    | some l => do
-      let obj ← parseOPBObjective l.trimAscii.toString
-      pure (some obj)
-    | none => pure none
-  -- Parse constraints (skip comments and objective)
-  let constrLines := allLines.filter fun l =>
-    let t := l.trimAscii.toString
-    !t.isEmpty && !t.startsWith "*" && !t.startsWith "min:" && !t.startsWith "max:"
-  let (maxVar, constrs) ← constrLines.foldlM (init := (0, #[])) fun (mv, cs) line => do
-    let (constr, newMv) ← parseOPBLine line
-    .ok (if newMv > mv then newMv else mv, cs.push constr)
-  .ok (maxVar, constrs, objective)
+    Except String (Nat × Array Sat.PB.Constr × Option OPBObjective) := do
+  let inst ← parseOPBNamed s
+  .ok (inst.numVars, inst.constrs, inst.objective)
 
-/-- Parse an OPB file into an array of PB constraints and variable count.
-    Supports the subset of OPB used by RoundingSat:
-    header line starting with `*`, constraint lines with terms and `>=`.
-    Skips `min:`/`max:` objective lines. -/
+/-- Parse an OPB file into an array of PB constraints and variable count
+(the objective is dropped). -/
 def parseOPB (s : String) : Except String (Nat × Array Sat.PB.Constr) := do
-  let (numVars, constrs, _) ← parseOPBWithObj s
-  .ok (numVars, constrs)
+  let inst ← parseOPBNamed s
+  .ok (inst.numVars, inst.constrs)
 
 -- Command: load OPB + proof files, verify, register theorem
 -- `opb_veripb_file name "path/to/opb" "path/to/proof"`
@@ -2605,50 +2930,13 @@ elab "opb_veripb_file " n:ident ppSpace
     let opbStr ← IO.FS.readFile (System.FilePath.mk opbPath.getString)
     let proofStr ← IO.FS.readFile
       (System.FilePath.mk proofPath.getString)
-    let (numVars, constrs) ← match parseOPB opbStr with
+    let inst ← match parseOPBNamed opbStr with
       | .ok r => pure r
       | .error e => throwError "OPB parse error: {e}"
     let (_ctx, _ctx', _proof) ←
-      fromVeriPBDirect constrs numVars proofStr name
-    Lean.logInfo m!"Registered {name} (OPB: {numVars} vars, \
-      {constrs.size} constraints, fully verified)"
-
--- Data-level verification for SAT/BOUNDS proofs (no theorem produced)
--- Used to validate that proofs parse and check correctly at the data level.
-
-/-- Initialize checking state from OPB constraints (for SAT/BOUNDS verification). -/
-def CheckState.fromOPB (constrs : Array Sat.PB.Constr) (numVars : Nat)
-    (obj : Option Sat.PB.Constr := none) : CheckState :=
-  let init : Std.HashMap Nat Sat.PB.Constr × Nat := ({}, 1)
-  let result := constrs.foldl (init := init) fun (db, nextId) constr =>
-    (db.insert nextId constr, nextId + 1)
-  ⟨result.1, result.2, constrs.size, numVars, none, obj⟩
-
-/-- Verify an OPB + proof at data level only. Returns Ok if valid. -/
-def verifyOPBProof (opbStr proofStr : String) : Except String String := do
-  let (numVars, constrs, objective) ← parseOPBWithObj opbStr
-  let proofData ← parseVeriPBProof proofStr
-  let initState := CheckState.fromOPB constrs numVars objective
-  let _finalState ← execAllSteps initState proofData.steps
-  -- Determine conclusion type from the proof (scan from end)
-  let conclusionType := proofData.steps.toList.reverse.findSome? fun s =>
-    match s with
-    | .conclusion _ => some "UNSAT"
-    | .conclusionSat _ => some "SAT"
-    | .conclusionBounds lb _ ub _ => some s!"BOUNDS {lb} {ub}"
-    | _ => none
-  match conclusionType with
-  | some ct => .ok ct
-  | none => .ok "NONE"
-
--- Command: data-level verification for SAT/BOUNDS proofs
--- `veripb_check "path/to/opb" "path/to/proof"`
-elab "veripb_check " opbPath:str ppSpace proofPath:str : command => do
-  liftTermElabM do
-    let opbStr ← IO.FS.readFile (System.FilePath.mk opbPath.getString)
-    let proofStr ← IO.FS.readFile (System.FilePath.mk proofPath.getString)
-    match verifyOPBProof opbStr proofStr with
-    | .ok ct => Lean.logInfo m!"Proof verified: conclusion {ct}"
-    | .error e => throwError "Verification failed: {e}"
+      fromVeriPBDirect inst.constrs inst.numVars proofStr name
+        (VarTable.ofList inst.names inst.numVars)
+    Lean.logInfo m!"Registered {name} (OPB: {inst.numVars} vars, \
+      {inst.constrs.size} constraints, fully verified)"
 
 end VeriPB

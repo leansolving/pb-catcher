@@ -1,0 +1,15 @@
+pseudo-Boolean proof version 3.0
+f 4 ;
+pol 1 2 + ;
+core id 5 ;
+delc 5 : : subproof
+pol 1 2 + 6 + ;
+qed : 7 ;
+delc 4 : : subproof
+	proofgoal #1
+		pol 1 2 + 3 + 9 2 * + ;
+	qed : 10 ;
+qed ;
+output NONE ;
+conclusion NONE ;
+end pseudo-Boolean proof ;

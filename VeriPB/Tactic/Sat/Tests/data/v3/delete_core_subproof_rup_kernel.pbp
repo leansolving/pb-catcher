@@ -1,0 +1,8 @@
+pseudo-Boolean proof version 3.0
+f 3;
+delc 2 :  : subproof
+rup >= 1 : 3 4;
+qed : 5;
+output NONE ;
+conclusion NONE;
+end pseudo-Boolean proof;
