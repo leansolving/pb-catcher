@@ -64,6 +64,7 @@ structure FBoolCheckState where
   origConstrs : Array Constr
   objective : Objective
   best : Option Nat
+  offset : Int := 0
   nextId : Nat
   numVars : Nat
   formulaSize : Nat
@@ -493,12 +494,14 @@ def verifyFRupBool (negConstr : FConstr)
 /-! ### Step execution -/
 
 def FBoolCheckState.fromConstrs (constrs : Array Constr)
-    (numVars : Nat) (objective : Objective) : FBoolCheckState :=
+    (numVars : Nat) (objective : Objective) (offset : Int := 0) :
+    FBoolCheckState :=
   { db := constrs.foldl (fun (db, i) c =>
       (db.insert i (toFConstr c), i + 1)) ({}, 1) |>.1
     origConstrs := constrs
     objective := objective
     best := none
+    offset := offset
     nextId := constrs.size + 1
     numVars := numVars
     formulaSize := constrs.size
@@ -541,20 +544,19 @@ def impliesSyntacticF (S T : FConstr) : Bool := Id.run do
   return decide (B + cost ≤ S.degree)
 
 /-- Mirrors `checkSolution`: the same literal conversion, with the valuation
-`solValuation` stored as a `Bool` array (a variable is true iff its
-positive literal is listed; variables beyond the array are false). -/
+`solValuation` stored as the hash set of the variables whose positive
+literal is listed (a variable is true iff it is in the set). -/
 def checkSolutionF (F : Array Constr) (obj : Objective)
     (lits : List VeriPB.OPBLit) : Option Nat :=
   match lits.mapM VeriPB.opbLitToPB with
   | .error _ => none
   | .ok pl =>
-    let n := pl.foldl (fun m l => max m (l.var + 1)) 0
-    let asgn := pl.foldl (fun (a : Array Bool) l => match l with
-      | .pos i => a.set! i true
-      | .neg _ => a) (Array.replicate n false)
+    let trueVars : Std.HashSet Nat := pl.foldl (fun s l => match l with
+      | .pos i => s.insert i
+      | .neg _ => s) {}
     let val : Sat.PB.Literal → Nat := fun l => match l with
-      | .pos i => if asgn.getD i false then 1 else 0
-      | .neg i => if asgn.getD i false then 0 else 1
+      | .pos i => if trueVars.contains i then 1 else 0
+      | .neg i => if trueVars.contains i then 0 else 1
     let evalS (ts : List Sat.PB.Term) : Nat :=
       ts.foldl (fun acc (a, l) => acc + a * val l) 0
     if F.all (fun c => decide (c.degree ≤ evalS c.terms)) then some (evalS obj)
@@ -835,15 +837,18 @@ def execFStepsFuel (fuel : Nat) (state : FBoolCheckState)
         match state.db[id]? with
         | some c => if c.isContra then some state else none
         | none => none
-      | .sol lits _ =>
-        match checkSolutionF state.origConstrs state.objective lits with
-        | none => none
-        | some b' => some { state with best := updBest state.best b' }
-      | .soli lits _ =>
+      | .sol lits value =>
         match checkSolutionF state.origConstrs state.objective lits with
         | none => none
         | some b' =>
-          some { state with
+          if !solValueOk state.offset b' value then none
+          else some { state with best := updBest state.best b' }
+      | .soli lits value =>
+        match checkSolutionF state.origConstrs state.objective lits with
+        | none => none
+        | some b' =>
+          if !solValueOk state.offset b' value then none
+          else some { state with
             db := state.db.insert state.nextId
               (toFConstr (improveConstr state.objective b'))
             nextId := state.nextId + 1
@@ -857,10 +862,12 @@ def execFStepsFuel (fuel : Nat) (state : FBoolCheckState)
     | none => none
 termination_by (fuel, steps.length)
 
+/-- Runtime mirror of `VeriPB.Reflect.hasUnsatConclusion` (same placement
+rule via the shared `lastConclusion`). -/
 def hasFUnsatConclusion (steps : Array VeriPB.ProofStep)
     (state : FBoolCheckState) : Bool :=
-  state.best.isNone && steps.any fun step => match step with
-    | .conclusion id => match state.db[id]? with
+  state.best.isNone && match lastConclusion steps with
+    | some (.conclusion id) => match state.db[id]? with
       | some c => c.isContra
       | none => false
     | _ => false
@@ -881,5 +888,28 @@ def checkProofBoolFast (constrs : Array Constr) (numVars : Nat)
     | some finalState =>
       hasFUnsatConclusion proofData.steps finalState
     | none => false
+
+/-- Runtime implementation of `VeriPB.Reflect.proofClaim?`: the fast step
+loop, then the shared `conclusionClaim` on the final state (database
+entries converted back with `fromFConstr`). -/
+def proofClaimFast? (constrs : Array Constr) (numVars : Nat)
+    (objective : Objective) (offset : Int) (names : List (String × Nat))
+    (proofStr : String) : Option Claim :=
+  match VeriPB.parseVeriPBProofWith (VeriPB.VarTable.ofList names numVars)
+      proofStr with
+  | .error _ => none
+  | .ok proofData =>
+    let initState := FBoolCheckState.fromConstrs constrs
+      (max numVars proofData.numVars) objective offset
+    let stepsList := proofData.steps.toList
+    let fuel := pbcDepth stepsList + 1
+    match execFStepsFuel fuel initState stepsList with
+    | some s =>
+      match lastConclusion proofData.steps with
+      | some step =>
+        conclusionClaim (fun id => (s.db[id]?).map fromFConstr) constrs
+          objective offset s.best step
+      | none => none
+    | none => none
 
 end VeriPB.Reflect.Fast

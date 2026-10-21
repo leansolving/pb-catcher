@@ -201,19 +201,20 @@ open VeriPB VeriPB.Tests.ParseV3 in
 
 open VeriPB VeriPB.Tests.ParseV3 in
 #eval show IO Unit from do
-  -- `conclusion SAT : ;` and `BOUNDS ... ub : ;` carry no hint
-  -- (parser.rs `conclusion_sat`, `conclusion_bounds`)
+  -- `conclusion SAT : ;` and `BOUNDS ... ub : ;` carry the all-false
+  -- assignment, as in CakePB (`parse_assg [] = SOME []`); VeriPB reads
+  -- them as no hint (parser.rs `conclusion_sat`, `conclusion_bounds`)
   match parseProof "conclusion SAT : ;\n" with
   | .ok p =>
     match p.steps.toList with
-    | [.conclusionSat none] => pure ()
-    | _ => throw (IO.userError "conclusion SAT : ; not parsed as SAT without hint")
+    | [.conclusionSat (some [])] => pure ()
+    | _ => throw (IO.userError "conclusion SAT : ; not parsed as the all-false assignment")
   | .error e => throw (IO.userError s!"conclusion SAT : ;: {e}")
   match parseProof "conclusion BOUNDS 3 5 : ;\n" with
   | .ok p =>
     match p.steps.toList with
-    | [.conclusionBounds (.finite 3) none (.finite 5) none] => pure ()
-    | _ => throw (IO.userError "conclusion BOUNDS 3 5 : ; not parsed without hint")
+    | [.conclusionBounds (.finite 3) none (.finite 5) (some [])] => pure ()
+    | _ => throw (IO.userError "conclusion BOUNDS 3 5 : ; not parsed as the all-false assignment")
   | .error e => throw (IO.userError s!"conclusion BOUNDS 3 5 : ;: {e}")
   -- a solution hint is kept
   match parseProof "conclusion SAT : x1 ~x2 ;\n" with

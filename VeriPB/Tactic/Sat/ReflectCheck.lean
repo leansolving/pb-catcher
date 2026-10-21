@@ -40,8 +40,10 @@ fuel recursion) to enable formal verification; only the fuel measure
 -/
 
 /-- Objective function to minimize: nonnegative coefficients over literals,
-as the OPB `min:` line after normalization. The constant offset is
-irrelevant to the checker (only differences of objective values matter).
+as the OPB `min:` line after normalization. The constant offset of the OPB
+objective (`VeriPB.OPBObjective.offset`) is kept apart (`BoolCheckState.offset`):
+it never enters `objVal` or the invariant, only the comparisons with values
+written in the proof (`sol`/`soli ... : v`, `conclusion BOUNDS`).
 A decision instance has the empty objective `[]`. -/
 abbrev Objective := List Sat.PB.Term
 
@@ -59,6 +61,10 @@ structure BoolCheckState where
   objective : Objective
   /-- Objective value of the best logged solution (`none` before any) -/
   best : Option Nat
+  /-- Constant offset of the OPB objective: the OPB objective value of a
+  valuation `v` is `objVal objective v + offset`. Never changes; used only
+  to check the values written in `sol`/`soli` lines. -/
+  offset : Int := 0
   /-- Next available constraint ID -/
   nextId : Nat
   /-- Number of variables -/
@@ -80,11 +86,12 @@ def mkDBRec : List Constr → Nat → Std.HashMap Nat Constr
 
 /-- Initialize check state from an array of constraints and an objective. -/
 def BoolCheckState.fromConstrs (constrs : Array Constr) (numVars : Nat)
-    (objective : Objective) : BoolCheckState :=
+    (objective : Objective) (offset : Int := 0) : BoolCheckState :=
   { db := mkDBRec constrs.toList 1
     origConstrs := constrs
     objective := objective
     best := none
+    offset := offset
     nextId := constrs.size + 1
     numVars := numVars
     formulaSize := constrs.size
@@ -529,6 +536,15 @@ def checkSolution (F : Array Constr) (obj : Objective)
     let ρ := solValuation pl
     if formulaSatB F ρ then some (objVal obj ρ) else none
 
+/-- The value written after a logged solution (`sol`/`soli lits : v`) must
+equal the OPB objective value of the solution, `b' + offset` where `b'` is
+its `objVal` (VeriPB `SolutionIncorrectValue`, CakePB likewise; MEM_039 §7).
+No value written: nothing to check. -/
+def solValueOk (offset : Int) (b' : Nat) (value : Option Int) : Bool :=
+  match value with
+  | none => true
+  | some v => (b' : Int) + offset == v
+
 /-- Best objective value after logging a solution of value `b'`. -/
 def updBest (best : Option Nat) (b' : Nat) : Option Nat :=
   match best with
@@ -541,16 +557,148 @@ says `obj ≤ b' − 1` (contradictory when `b' = 0`). -/
 def improveConstr (obj : Objective) (b' : Nat) : Constr :=
   Constr.negate ⟨obj, b'⟩
 
-/-- Check if any step is a valid UNSAT conclusion. Requires that no
-solution was logged: with a logged solution, a contradiction in the
-database only proves a lower bound on the objective. -/
+/-- Conclusion steps (`conclusion NONE` included). -/
+def isConclusionStep : VeriPB.ProofStep → Bool
+  | .conclusion _ | .conclusionSat _ | .conclusionBounds _ _ _ _
+  | .conclusionNone => true
+  | _ => false
+
+/-- Output steps (`output NONE` and the output claims). -/
+def isOutputStep : VeriPB.ProofStep → Bool
+  | .output | .outputClaim _ _ => true
+  | _ => false
+
+/-- The conclusion step of a proof whose footer is placed as VeriPB and
+CakePB require (VeriPB `conclusion.rs` `DoubleConclusion` and
+`WrongFooterOrder`, `output.rs` `DoubleOutput`; CakePB
+`parse_output_concl`, npbc_parseProgScript.sml): the conclusion is the last
+step, directly preceded by `output NONE`, and the proof has no other
+conclusion or output step (the parser requires the end line after the
+last step). `none` for any other placement. -/
+def lastConclusion (steps : Array VeriPB.ProofStep) :
+    Option VeriPB.ProofStep :=
+  match steps.toList.reverse with
+  | c :: .output :: rest =>
+    if isConclusionStep c &&
+        !rest.any (fun st => isConclusionStep st || isOutputStep st) then
+      some c
+    else none
+  | _ => none
+
+/-- The proof ends with a valid `conclusion UNSAT : id` (placed as
+`lastConclusion` requires) and logs no solution: with a logged solution, a
+contradiction in the database only proves a lower bound on the objective
+(VeriPB `ConclusionUnsatSolutionLogged`, CakePB likewise). -/
 def hasUnsatConclusion (steps : Array VeriPB.ProofStep)
     (state : BoolCheckState) : Bool :=
-  state.best.isNone && steps.any fun step => match step with
-    | .conclusion id => match state.db[id]? with
+  state.best.isNone && match lastConclusion steps with
+    | some (.conclusion id) => match state.db[id]? with
       | some c => c.isContra
       | none => false
     | _ => false
+
+/-! ### Conclusions: UNSAT, SAT, BOUNDS
+
+The acceptance rules follow CakePB's `check_hconcl` (npbc_checkScript.sml)
+and VeriPB's `conclusion.rs` where the two agree; see MEM_039 §6 and the
+P2a report for the citations and deviations. A conclusion is evaluated on
+the final state of the step loop. -/
+
+/-- What a proof's conclusion certifies; `VeriPB.Reflect.Claim.holds` gives
+the meaning. Bounds refer to the normalized objective in minimization form,
+`objVal objective v + offset`; for `max: f` the parser negates the objective,
+so the bounds are on `−f`. `none` stands for `INF`. -/
+inductive Claim where
+  | unsat
+  | sat
+  | bounds (lb ub : Option Int)
+  deriving DecidableEq, Repr, Inhabited
+
+/-- A `conclusion BOUNDS` bound as an `Option Int` (`INF` is `none`). -/
+def boundOpt : VeriPB.Bound → Option Int
+  | .finite v => some v
+  | .inf => none
+
+/-- Lower-bound target `objective ≥ lb − offset` (the degree truncated at 0:
+a target with degree `≤ 0` is trivial). -/
+def lowerBoundConstr (obj : Objective) (offset lb : Int) : Constr :=
+  ⟨obj, (lb - offset).toNat⟩
+
+/-- Lower bound `lb : id` of `conclusion BOUNDS` (CakePB `check_hconcl`
+`HOBounds`): the hint id is required and must be in the database. `INF`
+(`none`): no logged solution and a contradictory constraint `id`. A finite
+`lb`: at most the best logged value (`lb ≤ best + offset`, CakePB
+`opt_le lbi dbound`), and constraint `id` syntactically implies
+`objective ≥ lb − offset` (`impliesSyntactic`; a contradictory constraint
+implies everything). -/
+def lowerBoundOk (getC : Nat → Option Constr) (obj : Objective)
+    (offset : Int) (best : Option Nat) (lb : Option Int)
+    (hint : Option Nat) : Bool :=
+  match hint with
+  | none => false
+  | some id =>
+    match getC id with
+    | none => false
+    | some D =>
+      match lb with
+      | none => best.isNone && D.isContra
+      | some l =>
+        (match best with
+          | none => true
+          | some b => decide (l ≤ (b : Int) + offset)) &&
+        impliesSyntactic (VeriPB.normalizeConstr D)
+          (VeriPB.normalizeConstr (lowerBoundConstr obj offset l))
+
+/-- Upper bound `ub [: lits]` of `conclusion BOUNDS` (CakePB): `INF` needs
+nothing; a finite `ub` needs a solution of OPB value at most `ub`: the
+solution `lits` checked against the original formula, or without `lits` the
+best logged solution. -/
+def upperBoundOk (F : Array Constr) (obj : Objective) (offset : Int)
+    (best : Option Nat) (ub : Option Int)
+    (lits : Option (List VeriPB.OPBLit)) : Bool :=
+  match ub with
+  | none => true
+  | some u =>
+    match lits with
+    | none => match best with
+      | none => false
+      | some b => decide ((b : Int) + offset ≤ u)
+    | some ls => match checkSolution F obj ls with
+      | none => false
+      | some val => decide ((val : Int) + offset ≤ u)
+
+/-- `conclusion SAT [: lits]` (CakePB `HDSat`): with `lits`, a solution of
+the original formula; without, some logged solution. -/
+def satOk (F : Array Constr) (obj : Objective) (best : Option Nat)
+    (lits : Option (List VeriPB.OPBLit)) : Bool :=
+  match lits with
+  | none => best.isSome
+  | some ls => (checkSolution F obj ls).isSome
+
+/-- The claim certified by a conclusion step on a final state given by its
+database lookup `getC`, formula `F`, objective, offset and best value. -/
+def conclusionClaim (getC : Nat → Option Constr) (F : Array Constr)
+    (obj : Objective) (offset : Int) (best : Option Nat) :
+    VeriPB.ProofStep → Option Claim
+  | .conclusion id =>
+    match getC id with
+    | some c =>
+      if c.isContra then
+        match best with
+        | none => some .unsat
+        -- UNSAT after a logged solution: rejected (VeriPB
+        -- `ConclusionUnsatSolutionLogged`; CakePB `HDUnsat` needs
+        -- `dbound = NONE`)
+        | some _ => none
+      else none
+    | none => none
+  | .conclusionSat lits => if satOk F obj best lits then some .sat else none
+  | .conclusionBounds lb hint ub lits =>
+    if lowerBoundOk getC obj offset best (boundOpt lb) hint &&
+        upperBoundOk F obj offset best (boundOpt ub) lits then
+      some (.bounds (boundOpt lb) (boundOpt ub))
+    else none
+  | _ => none
 
 /-- Subproof nesting depth for fuel computation: `pbc`, `red`/`dom`
 (both forms) and checked deletion with a subproof consume one unit; a

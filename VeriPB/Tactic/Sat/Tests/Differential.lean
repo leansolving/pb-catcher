@@ -58,10 +58,12 @@ def dbDiff (slow : Std.HashMap Nat Constr) (fast : Std.HashMap Nat Fast.FConstr)
 `fullEvery` controls how often the whole database is compared (every step by
 default); in between, only the size and the newly inserted constraint are
 compared. If `expectReject = some k`, both checkers must reject step `k`
-(and agree on every step before it); the test then stops there. -/
-def runOne (name opbPath proofPath : String) (fullEvery : Nat := 1)
+(and agree on every step before it); the test then stops there. Returns the
+claim of the last conclusion step on the final states (`none` after an
+expected rejection); the two checkers must agree on it. -/
+def runOneClaim (name opbPath proofPath : String) (fullEvery : Nat := 1)
     (expectReject : Option Nat := none) :
-    IO Unit := do
+    IO (Option Claim) := do
   let opbStr ← IO.FS.readFile opbPath
   let proofStr ← IO.FS.readFile proofPath
   let inst ← match VeriPB.parseOPBNamed opbStr with
@@ -70,6 +72,9 @@ def runOne (name opbPath proofPath : String) (fullEvery : Nat := 1)
   let obj : Objective := match inst.objective with
     | some o => o.terms
     | none => []
+  let offset : Int := match inst.objective with
+    | some o => o.offset
+    | none => 0
   let proof ← match VeriPB.parseVeriPBProofWith
       (VeriPB.VarTable.ofList inst.names inst.numVars) proofStr with
     | .ok p => pure p
@@ -79,8 +84,8 @@ def runOne (name opbPath proofPath : String) (fullEvery : Nat := 1)
   let numVars := max inst.numVars proof.numVars
   let steps := proof.steps.toList
   let fuel := pbcDepth steps + 1
-  let mut slow := BoolCheckState.fromConstrs constrs numVars obj
-  let mut fast := Fast.FBoolCheckState.fromConstrs constrs numVars obj
+  let mut slow := BoolCheckState.fromConstrs constrs numVars obj offset
+  let mut fast := Fast.FBoolCheckState.fromConstrs constrs numVars obj offset
   if let some msg := dbDiff slow.db fast.db then
     throw (IO.userError s!"{name}: initial state: {msg}")
   let mut k := 0
@@ -90,8 +95,11 @@ def runOne (name opbPath proofPath : String) (fullEvery : Nat := 1)
     match rs, rf with
     | none, none =>
       if expectReject == some k then
+        if (Fast.proofClaimFast? constrs inst.numVars obj offset inst.names
+            proofStr).isSome then
+          throw (IO.userError s!"{name}: proofClaimFast? accepts a rejected proof")
         IO.println s!"{name}: {k} steps identical, both reject step {k} as expected"
-        return
+        return none
       throw (IO.userError s!"{name}: both checkers reject step {k}")
     | some _, none =>
       throw (IO.userError s!"{name}: MISMATCH at step {k}: verified accepts, fast rejects")
@@ -100,7 +108,7 @@ def runOne (name opbPath proofPath : String) (fullEvery : Nat := 1)
     | some s, some f =>
       if s.nextId != f.nextId then
         throw (IO.userError s!"{name}: MISMATCH at step {k}: nextId {s.nextId} vs {f.nextId}")
-      if s.best != f.best then
+      if s.best != f.best || s.offset != f.offset then
         throw (IO.userError s!"{name}: MISMATCH at step {k}: best {s.best} vs {f.best}")
       if s.s2c != f.s2c || sortedIds s.coreIds != sortedIds f.coreIds then
         throw (IO.userError s!"{name}: MISMATCH at step {k}: core sets \
@@ -132,11 +140,42 @@ def runOne (name opbPath proofPath : String) (fullEvery : Nat := 1)
   let okFast := Fast.hasFUnsatConclusion proof.steps fast
   if okSlow != okFast then
     throw (IO.userError s!"{name}: conclusion differs: verified {okSlow}, fast {okFast}")
-  IO.println s!"{name}: {k} steps identical, conclusion {okSlow}"
+  -- the claim of the last conclusion step (SAT, BOUNDS, optimality), as
+  -- `proofClaim?` and `Fast.proofClaimFast?` evaluate it on the final states
+  let claim? (getC : Nat → Option Constr) (best : Option Nat) : Option Claim :=
+    match lastConclusion proof.steps with
+    | some st => conclusionClaim getC constrs obj offset best st
+    | none => none
+  let cSlow := claim? (fun id => slow.db[id]?) slow.best
+  let cFast := claim? (fun id => (fast.db[id]?).map Fast.fromFConstr) fast.best
+  if cSlow != cFast then
+    throw (IO.userError s!"{name}: claim differs: verified {repr cSlow}, fast {repr cFast}")
+  -- the runtime entry point (`proofClaim?` is `@[implemented_by]` it)
+  let cRun := Fast.proofClaimFast? constrs inst.numVars obj offset inst.names proofStr
+  if cSlow != cRun then
+    throw (IO.userError s!"{name}: claim differs: verified {repr cSlow}, \
+      proofClaimFast? {repr cRun}")
+  -- the UNSAT path agrees with the UNSAT claim
+  if okSlow != (cSlow == some Claim.unsat) then
+    throw (IO.userError s!"{name}: hasUnsatConclusion {okSlow}, claim {repr cSlow}")
+  IO.println s!"{name}: {k} steps identical, conclusion {okSlow}, claim {repr cSlow}"
+  return cSlow
+
+/-- `runOneClaim` without the claim. -/
+def runOne (name opbPath proofPath : String) (fullEvery : Nat := 1)
+    (expectReject : Option Nat := none) : IO Unit :=
+  discard <| runOneClaim name opbPath proofPath fullEvery expectReject
+
+/-- `runOneClaim`, and the claim must be `expected`. -/
+def runExpect (name opbPath proofPath : String) (expected : Option Claim) :
+    IO Unit := do
+  let c ← runOneClaim name opbPath proofPath
+  if c != expected then
+    throw (IO.userError s!"{name}: claim {repr c}, expected {repr expected}")
 
 end VeriPB.Tests.Differential
 
-open VeriPB.Tests.Differential in
+open VeriPB.Tests.Differential VeriPB.Reflect in
 #eval show IO Unit from do
   let d := "VeriPB/Tactic/Sat/Tests/data/"
   for n in ["php21", "red_subproof", "red_swap", "red_const", "red_neglit", "red_basic",
@@ -253,3 +292,65 @@ open VeriPB.Tests.Differential in
   -- the final `ia x5 >= 1` is accepted here and rejected by both references
   -- (sound: it is the input constraint 6).
   runOne "polcut_clamp" (pc ++ "polcut.opb") (pc ++ "polcut_clamp.pbp")
+  -- Conclusions SAT and BOUNDS, solution values and the objective offset
+  -- (Tests/data/concl, P2a). The expected claim is PBLean's verdict; every
+  -- verdict agrees with CakePB (cake_pb, CakeML master 2026-10-21), and with
+  -- VeriPB 3.0.1 except where noted.
+  let cd := d ++ "concl/"
+  let some3 : Option Int := some 3
+  for (o, n, c) in [
+      -- vc6.opb (min: x1 + ... + x6, optimum 3, offset 0)
+      ("vc6.opb", "vc6_bounds_nolits", some (Claim.bounds some3 some3)), -- ub = logged best
+      ("vc6.opb", "vc6_bounds_noub", some (Claim.bounds some3 none)),
+      ("vc6.opb", "vc6_bounds_ub_above", some (Claim.bounds some3 (some 5))), -- VeriPB rejects (ub ≠ best)
+      ("vc6.opb", "vc6_solval_ok", some (Claim.bounds some3 some3)),     -- soli ... : 3
+      ("vc6.opb", "vc6_sat_obj", some Claim.sat),                       -- VeriPB rejects (objective)
+      ("vc6.opb", "vc6_lb_too_high", none),       -- lb 4 above the best value 3
+      ("vc6.opb", "vc6_lb_not_implied", none),    -- hint 1 does not imply obj ≥ 3 (VeriPB accepts:
+                                                  -- it ignores the hint when the db has a contradiction)
+      ("vc6.opb", "vc6_lb_nohint", none),         -- no hint (VeriPB accepts, CakePB cannot parse)
+      ("vc6.opb", "vc6_ub_low", none),            -- ub 2 below the logged best 3
+      ("vc6.opb", "vc6_ub_lits_low", none),       -- ub 2 below the value 3 of the listed solution
+      ("vc6.opb", "vc6_ub_lits_bad", none),       -- the listed solution violates x1 + x2 >= 1
+      -- php21_obj.opb (unsatisfiable, min: 2 x1 - x2, offset -1)
+      ("php21_obj.opb", "php21_obj_inf", some (Claim.bounds none none)),
+      ("php21_obj.opb", "php21_obj_lb", some (Claim.bounds (some 5) none)), -- vacuous lower bound
+      ("php21_obj.opb", "php21_obj_inf_ub", none),  -- INF lower bound with a finite upper bound
+      ("php21_obj.opb", "php21_obj_lb_ub", none),   -- finite ub without any solution
+      -- off3.opb (min: -2 x1 -2 x2 -2 x3 = 2 ~x1 + 2 ~x2 + 2 ~x3 - 6, optimum -2)
+      ("concl/off3.opb", "off3_ok", some (Claim.bounds (some (-2)) (some (-2)))),
+      ("concl/off3.opb", "off3_lb_high", none),     -- lb -1 above the best value -2
+      ("concl/off3.opb", "off3_ub_low", none),      -- ub -3 below the best value -2
+      ("concl/off3.opb", "off3_ub_lits_nooffset", none), -- ub -6 = value without the offset
+      -- sat3.opb (decision instance)
+      ("concl/sat3.opb", "sat3_hint", some Claim.sat),
+      ("concl/sat3.opb", "sat3_sol", some Claim.sat),
+      ("concl/sat3.opb", "sat3_bad", none),         -- the listed assignment is no solution
+      ("concl/sat3.opb", "sat3_nosol", none)] do    -- no solution listed or logged
+    runExpect n (d ++ o) (cd ++ n ++ ".pbp") c
+  -- a wrong value after a logged solution is rejected at the soli step
+  for (o, n) in [("vc6.opb", "vc6_solval_bad"),        -- soli ... : 4 (value 3)
+      ("concl/off3.opb", "off3_solval_nooffset"),          -- soli ... : 4 (objVal 4, value -2)
+      ("concl/off3.opb", "off3_solval_wrong")] do          -- soli ... : -1
+    runOne n (d ++ o) (cd ++ n ++ ".pbp") (expectReject := some 2)
+  -- conclusion UNSAT and BOUNDS INF after a logged solution: rejected (VeriPB
+  -- and CakePB too); UNSAT on an instance with an objective (VeriPB rejects,
+  -- CakePB accepts)
+  runExpect "vc6_fakeunsat" (d ++ "vc6.opb") (d ++ "vc6_fakeunsat_kernel.pbp") none
+  runExpect "vc6_inf_after_soli" (d ++ "vc6.opb") (cd ++ "vc6_inf_after_soli.pbp") none
+  -- an empty hint `: ;` is the all-false assignment (CakePB; VeriPB: no
+  -- hint): no solution of sat3 / vc6 (rejected, CakePB too), a solution of
+  -- allfalse (accepted, CakePB too; VeriPB rejects)
+  runExpect "sat3_empty_hint" (cd ++ "sat3.opb") (cd ++ "sat3_empty_hint.pbp") none
+  runExpect "vc6_ub_empty_hint" (d ++ "vc6.opb") (cd ++ "vc6_ub_empty_hint.pbp") none
+  runExpect "allfalse_empty_hint" (cd ++ "allfalse.opb") (cd ++ "allfalse_empty_hint.pbp")
+    (some Claim.sat)
+  -- footer placement (rejected by VeriPB and CakePB): every step is
+  -- accepted, the conclusion is not
+  for n in ["php21_concl_before_output", "php21_concl_no_output", "php21_concl_twice",
+      "php21_concl_not_last"] do
+    runExpect n (d ++ "php21.opb") (cd ++ n ++ ".pbp") none
+  runExpect "sat3_concl_before_output" (cd ++ "sat3.opb")
+    (cd ++ "sat3_concl_before_output.pbp") none
+  runExpect "php21_obj_unsat" (d ++ "php21_obj.opb") (d ++ "php21_kernel.pbp")
+    (some Claim.unsat)

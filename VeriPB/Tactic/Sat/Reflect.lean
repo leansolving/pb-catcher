@@ -317,15 +317,18 @@ def execStepsFuel (fuel : Nat) (state : BoolCheckState)
         match state.db[id]? with
         | some c => if c.isContra then some state else none
         | none => none
-      | .sol lits _ =>
-        match checkSolution state.origConstrs state.objective lits with
-        | none => none
-        | some b' => some { state with best := updBest state.best b' }
-      | .soli lits _ =>
+      | .sol lits value =>
         match checkSolution state.origConstrs state.objective lits with
         | none => none
         | some b' =>
-          some { state with
+          if !solValueOk state.offset b' value then none
+          else some { state with best := updBest state.best b' }
+      | .soli lits value =>
+        match checkSolution state.origConstrs state.objective lits with
+        | none => none
+        | some b' =>
+          if !solValueOk state.offset b' value then none
+          else some { state with
             db := state.db.insert state.nextId
               (improveConstr state.objective b')
             nextId := state.nextId + 1
@@ -362,6 +365,39 @@ def checkProofBool (constrs : Array Constr) (numVars : Nat)
     | some finalState =>
       hasUnsatConclusion proofData.steps finalState
     | none => false
+
+/-- Checker for every conclusion kind: runs the proof like `checkProofBool`
+(with the objective's constant `offset`, which the `sol`/`soli` values are
+checked against) and returns the claim its last conclusion step certifies
+on the final state (`conclusionClaim`), or `none` if a step or the
+conclusion is rejected. `checkProofClaim_sound` gives the meaning
+(`Claim.holds`). -/
+@[implemented_by Fast.proofClaimFast?]
+def proofClaim? (constrs : Array Constr) (numVars : Nat)
+    (objective : Objective) (offset : Int) (names : List (String × Nat))
+    (proofStr : String) : Option Claim :=
+  match VeriPB.parseVeriPBProofWith (VeriPB.VarTable.ofList names numVars)
+      proofStr with
+  | .error _ => none
+  | .ok proofData =>
+    let initState := BoolCheckState.fromConstrs constrs
+      (max numVars proofData.numVars) objective offset
+    let fuel := pbcDepth proofData.steps.toList + 1
+    match execStepsFuel fuel initState proofData.steps.toList with
+    | some s =>
+      match lastConclusion proofData.steps with
+      | some step =>
+        conclusionClaim (fun id => s.db[id]?) constrs objective offset s.best
+          step
+      | none => none
+    | none => none
+
+/-- Boolean entry point for native evaluation: the proof certifies `claim`. -/
+def checkProofClaimBool (constrs : Array Constr) (numVars : Nat)
+    (objective : Objective) (offset : Int) (names : List (String × Nat))
+    (proofStr : String) (claim : Claim) : Bool :=
+  decide (proofClaim? constrs numVars objective offset names proofStr =
+    some claim)
 
 /-! ## Soundness theorem infrastructure -/
 
@@ -952,6 +988,28 @@ private theorem weakenConstr_sat (c : Constr) (varIdx : Nat) (v : Valuation)
   have h2 := evalSum_le_coeffSumR v (c.terms.filter fun t => t.2.var == varIdx)
   omega
 
+/-- The cut operations `k c`, `k n`, `k m` of `execPolOne`: a sound cut `f`
+of the normalized top constraint, rejected for `k = 0`. -/
+private theorem cut_case (original : Array Constr) (db : Std.HashMap Nat Constr)
+    (f : Constr → Nat → Constr)
+    (hf : ∀ c k, 0 < k → ∀ v, c.sat v → (f c k).sat v)
+    (k : Nat) (c : Constr) (rest stack' : List VeriPB.StackElem)
+    (hstack : StackSound original db (.nat k :: .constr c :: rest))
+    (hexec : (if k == 0 then none
+      else some (VeriPB.StackElem.constr (f (VeriPB.normalizeConstr c) k) :: rest))
+        = some stack') :
+    StackSound original db stack' := by
+  by_cases hk : k == 0
+  · simp [hk] at hexec
+  · simp only [hk, Bool.false_eq_true, ↓reduceIte, Option.some.injEq] at hexec
+    subst hexec
+    have hc := StackSound_head_constr _ _ c rest
+      (StackSound_tail _ _ _ _ hstack)
+    have hkpos : 0 < k := Nat.pos_of_ne_zero (by simpa using hk)
+    exact StackSound_cons_constr _ _ _ rest
+      (StackSound_tail _ _ _ _ (StackSound_tail _ _ _ _ hstack))
+      fun v hsat => hf _ k hkpos v (normalize_sat c v (hc v hsat))
+
 theorem execPolOne_sound (db : Std.HashMap Nat Constr)
     (original : Array Constr) (stack stack' : List VeriPB.StackElem)
     (op : VeriPB.PolOp)
@@ -1074,51 +1132,21 @@ theorem execPolOne_sound (db : Std.HashMap Nat Constr)
     simp only [execPolOne] at hexec
     match stack, hstack with
     | .nat k :: .constr c :: rest, hstack =>
-      by_cases hk : k == 0
-      · simp [hk] at hexec
-      · simp only [hk, Bool.false_eq_true, ↓reduceIte, Option.some.injEq] at hexec
-        subst hexec
-        have hc := StackSound_head_constr _ _ c rest
-          (StackSound_tail _ _ _ _ hstack)
-        have hkpos : 0 < k := Nat.pos_of_ne_zero (by simpa using hk)
-        exact StackSound_cons_constr _ _ _ rest
-          (StackSound_tail _ _ _ _ (StackSound_tail _ _ _ _ hstack))
-          fun v hsat => Sat.PB.cgDiv_sat _ k hkpos v
-            (normalize_sat c v (hc v hsat))
+      exact cut_case _ _ _ Sat.PB.cgDiv_sat k c rest _ hstack hexec
     | [], _ | [_], _ | .constr _ :: _, _ => simp at hexec
     | .nat _ :: .nat _ :: _, _ => simp at hexec
   | mir =>
     simp only [execPolOne] at hexec
     match stack, hstack with
     | .nat k :: .constr c :: rest, hstack =>
-      by_cases hk : k == 0
-      · simp [hk] at hexec
-      · simp only [hk, Bool.false_eq_true, ↓reduceIte, Option.some.injEq] at hexec
-        subst hexec
-        have hc := StackSound_head_constr _ _ c rest
-          (StackSound_tail _ _ _ _ hstack)
-        have hkpos : 0 < k := Nat.pos_of_ne_zero (by simpa using hk)
-        exact StackSound_cons_constr _ _ _ rest
-          (StackSound_tail _ _ _ _ (StackSound_tail _ _ _ _ hstack))
-          fun v hsat => Sat.PB.mir_sat _ k hkpos v
-            (normalize_sat c v (hc v hsat))
+      exact cut_case _ _ _ Sat.PB.mir_sat k c rest _ hstack hexec
     | [], _ | [_], _ | .constr _ :: _, _ => simp at hexec
     | .nat _ :: .nat _ :: _, _ => simp at hexec
   | mirVar =>
     simp only [execPolOne] at hexec
     match stack, hstack with
     | .nat k :: .constr c :: rest, hstack =>
-      by_cases hk : k == 0
-      · simp [hk] at hexec
-      · simp only [hk, Bool.false_eq_true, ↓reduceIte, Option.some.injEq] at hexec
-        subst hexec
-        have hc := StackSound_head_constr _ _ c rest
-          (StackSound_tail _ _ _ _ hstack)
-        have hkpos : 0 < k := Nat.pos_of_ne_zero (by simpa using hk)
-        exact StackSound_cons_constr _ _ _ rest
-          (StackSound_tail _ _ _ _ (StackSound_tail _ _ _ _ hstack))
-          fun v hsat => Sat.PB.mirVar_sat _ k hkpos v
-            (normalize_sat c v (hc v hsat))
+      exact cut_case _ _ _ Sat.PB.mirVar_sat k c rest _ hstack hexec
     | [], _ | [_], _ | .constr _ :: _, _ => simp at hexec
     | .nat _ :: .nat _ :: _, _ => simp at hexec
 
@@ -2183,8 +2211,9 @@ theorem checkSolution_sound (F : Array Constr) (obj : Objective)
       simpa [constrSatB, Constr.sat] using hc'
     · simp [hf] at h
 
-theorem StateInv_init (F : Array Constr) (numVars : Nat) (obj : Objective) :
-    StateInv (BoolCheckState.fromConstrs F numVars obj) :=
+theorem StateInv_init (F : Array Constr) (numVars : Nat) (obj : Objective)
+    (offset : Int := 0) :
+    StateInv (BoolCheckState.fromConstrs F numVars obj offset) :=
   ⟨fun v hF _ => ⟨v, fun id c hget => hF c (mkDBRec_mem F.toList 1 id c hget),
     Nat.le_refl _⟩,
    fun b hb => by simp [BoolCheckState.fromConstrs] at hb⟩
@@ -2416,22 +2445,26 @@ theorem execStepsFuel_inv_preserve_fields : ∀ (fuel : Nat)
         · simp [hc] at hsteps; exact ih_rest state hinv hsteps
         · simp [hc] at hsteps
       | none => simp [hdb] at hsteps
-    | sol lits _ =>
+    | sol lits value =>
       match hchk : checkSolution state.origConstrs state.objective lits with
       | none => simp [hchk] at hsteps
       | some b' =>
-        simp [hchk] at hsteps
+        by_cases hv : solValueOk state.offset b' value = false
+        · simp [hchk, hv] at hsteps
+        simp [hchk, hv] at hsteps
         apply ih_rest _ _ hsteps
         obtain ⟨ρ, hρ, hval⟩ := checkSolution_sound _ _ _ _ hchk
         have hbw := BestWitnessed_updBest _ _ _ ρ hinv.2 hρ
         rw [hval] at hbw
         exact ⟨fun v hF himp =>
           hinv.1 v hF (Improving_updBest _ _ _ _ himp).2, hbw⟩
-    | soli lits _ =>
+    | soli lits value =>
       match hchk : checkSolution state.origConstrs state.objective lits with
       | none => simp [hchk] at hsteps
       | some b' =>
-        simp [hchk] at hsteps
+        by_cases hv : solValueOk state.offset b' value = false
+        · simp [hchk, hv] at hsteps
+        simp [hchk, hv] at hsteps
         apply ih_rest _ _ hsteps
         obtain ⟨ρ, hρ, hval⟩ := checkSolution_sound _ _ _ _ hchk
         have hbw := BestWitnessed_updBest _ _ _ ρ hinv.2 hρ
@@ -2528,19 +2561,14 @@ theorem checkProof_sound (constrs : Array Constr) (numVars : Nat)
       simp only [hexec] at h
       -- Extract conclusion information
       simp only [hasUnsatConclusion, Bool.and_eq_true] at h
-      obtain ⟨hbest, h⟩ := h
+      obtain ⟨hbest, hpi⟩ := h
       have hbn : finalState.best = none := Option.isNone_iff_eq_none.mp hbest
-      obtain ⟨i, _, _, _, hpi⟩ := Array.any_iff_exists.mp h
-      revert hpi
-      generalize proofData.steps[i] = step
-      intro hpi
-      cases step with
-      | conclusion id =>
-        simp at hpi
-        match hdb : finalState.db[id]? with
-        | some c =>
-          simp [hdb] at hpi
-          -- hpi : c.isContra = true
+      -- the placed conclusion is `conclusion UNSAT : id` with `db[id]`
+      -- contradictory
+      split at hpi
+      · rename_i id _
+        split at hpi
+        · rename_i c hdb
           have hno := (execStepsFuel_no_improving _ constrs _ objective
             _ finalState hexec id c (by rwa [Std.HashMap.get?_eq_getElem?])
             (by simpa [Constr.isContra] using hpi)).1
@@ -2550,9 +2578,257 @@ theorem checkProof_sound (constrs : Array Constr) (numVars : Nat)
               fun c' hc' => Classical.byContradiction fun hn =>
                 hne ⟨c', hc', hn⟩
             exact hno v hall (fun b hb => by rw [hbn] at hb; cases hb)
-        | none => simp [hdb] at hpi
-      | _ => simp at hpi
+        · exact absurd hpi Bool.false_ne_true
+      · exact absurd hpi Bool.false_ne_true
     | none => simp [hexec] at h
+
+/-! ## SAT and BOUNDS conclusions
+
+The statements are about the normalized objective in minimization form: the
+value of `v` is `objVal obj v + offset` (`Int`), where `obj` are the
+normalized nonnegative terms and `offset` the constant
+(`VeriPB.OPBObjective`). For `max: f` the parser negates the objective, as
+VeriPB does, so the statements are about `−f`: a lower bound `lb` gives
+`f ≤ −lb` for every solution, an upper bound `ub` a solution with
+`f ≥ −ub`. -/
+
+/-- `F` has a solution. -/
+def formulaSatisfiable (F : Array Constr) : Prop := ∃ v, FormulaSat F v
+
+/-- Lower bound on the normalized min-form objective `objVal obj v + offset`
+over the solutions of `F`; `none` (`INF`) means that `F` has no solution.
+For `max: f` (negated by the parser) `some lb` gives `f ≤ −lb` for every
+solution. -/
+def formulaLowerBound (F : Array Constr) (obj : Objective) (offset : Int) :
+    Option Int → Prop
+  | none => ∀ v, ¬ FormulaSat F v
+  | some lb => ∀ v, FormulaSat F v → lb ≤ (objVal obj v : Int) + offset
+
+/-- Upper bound: some solution of `F` has normalized min-form objective value
+`objVal obj v + offset` at most `ub`; `none` (`INF`) claims nothing. For
+`max: f` (negated by the parser) `some ub` gives a solution with
+`f ≥ −ub`. -/
+def formulaUpperBound (F : Array Constr) (obj : Objective) (offset : Int) :
+    Option Int → Prop
+  | none => True
+  | some ub => ∃ v, FormulaSat F v ∧ (objVal obj v : Int) + offset ≤ ub
+
+/-- `conclusion BOUNDS lb ub` (CakePB's `sem_concl` for `OBounds`): bounds on
+the normalized min-form objective `objVal obj v + offset`. For `max: f`
+(negated by the parser) the statement is about `−f`: `lb` gives `f ≤ −lb`
+for every solution and `ub` a solution with `f ≥ −ub`. -/
+def formulaBounds (F : Array Constr) (obj : Objective) (offset : Int)
+    (lb ub : Option Int) : Prop :=
+  formulaLowerBound F obj offset lb ∧ formulaUpperBound F obj offset ub
+
+/-- Meaning of a claim. -/
+def Claim.holds (F : Array Constr) (obj : Objective) (offset : Int) :
+    Claim → Prop
+  | .unsat => formulaUnsat F
+  | .sat => formulaSatisfiable F
+  | .bounds lb ub => formulaBounds F obj offset lb ub
+
+/-- Equal lower and upper bounds: `k` is the optimum, attained by a
+solution. -/
+theorem formulaBounds_optimum {F : Array Constr} {obj : Objective}
+    {offset k : Int} (h : formulaBounds F obj offset (some k) (some k)) :
+    (∃ v, FormulaSat F v ∧ (objVal obj v : Int) + offset = k) ∧
+      ∀ v, FormulaSat F v → k ≤ (objVal obj v : Int) + offset := by
+  simp only [formulaBounds, formulaLowerBound, formulaUpperBound] at h
+  obtain ⟨hlb, v, hv, hle⟩ := h
+  exact ⟨⟨v, hv, Int.le_antisymm hle (hlb v hv)⟩, hlb⟩
+
+theorem formulaUnsat_of_forall {F : Array Constr}
+    (h : ∀ v, ¬ FormulaSat F v) : formulaUnsat F := by
+  intro v
+  exact Classical.byContradiction fun hne =>
+    h v fun c hc => Classical.byContradiction fun hn => hne ⟨c, hc, hn⟩
+
+/-- A contradiction with no logged solution: `F` has no solution. -/
+theorem StateInv_unsat {s : BoolCheckState} (hinv : StateInv s)
+    (hb : s.best = none) {id : Nat} {c : Constr} (hc : s.db[id]? = some c)
+    (hcontra : c.isContra = true) : ∀ v, ¬ FormulaSat s.origConstrs v := by
+  intro v hv
+  obtain ⟨w, hw, _⟩ := hinv.1 v hv (fun b hb' => by rw [hb] at hb'; cases hb')
+  exact contra_unsat c w (by simpa [Constr.isContra] using hcontra)
+    (hw id c (by rw [Std.HashMap.get?_eq_getElem?]; exact hc))
+
+/-- A database constraint implying `objective ≥ lb − offset`, with `lb` at
+most the best logged value: `lb` is a lower bound. Improving solutions have
+a database counterpart (`DBOpt`) that satisfies the implied bound; the
+others are bounded by the best value. -/
+theorem StateInv_lower {s : BoolCheckState} (hinv : StateInv s) (offset : Int)
+    {id : Nat} {D : Constr} (hD : s.db[id]? = some D) (l : Int)
+    (hbest : ∀ b, s.best = some b → l ≤ (b : Int) + offset)
+    (himpl : impliesSyntactic (VeriPB.normalizeConstr D)
+      (VeriPB.normalizeConstr (lowerBoundConstr s.objective offset l)) = true) :
+    ∀ v, FormulaSat s.origConstrs v →
+      l ≤ (objVal s.objective v : Int) + offset := by
+  intro v hv
+  by_cases himp : Improving s.objective s.best v
+  · obtain ⟨w, hw, hle⟩ := hinv.1 v hv himp
+    have hDw : D.sat w := hw id D (by rw [Std.HashMap.get?_eq_getElem?]; exact hD)
+    have hT := normalize_sat_rev _ w
+      (impliesSyntactic_sound _ _ w himpl (normalize_sat D w hDw))
+    simp only [lowerBoundConstr, Constr.sat] at hT
+    simp only [objVal] at hle ⊢
+    have := Int.self_le_toNat (l - offset)
+    have : (((l - offset).toNat : Nat) : Int) ≤ (Sat.PB.evalSum w s.objective : Int) :=
+      Int.ofNat_le.mpr hT
+    have : (Sat.PB.evalSum w s.objective : Int) ≤ (Sat.PB.evalSum v s.objective : Int) :=
+      Int.ofNat_le.mpr hle
+    omega
+  · simp only [Improving, Classical.not_forall] at himp
+    obtain ⟨b, hb, hnlt⟩ := himp
+    have := hbest b hb
+    have : (b : Int) ≤ (objVal s.objective v : Int) :=
+      Int.ofNat_le.mpr (Nat.le_of_not_lt hnlt)
+    omega
+
+theorem lowerBoundOk_sound {s : BoolCheckState} (hinv : StateInv s)
+    (offset : Int) (lb : Option Int) (hint : Option Nat)
+    (h : lowerBoundOk (fun id => s.db[id]?) s.objective offset s.best lb hint
+      = true) :
+    formulaLowerBound s.origConstrs s.objective offset lb := by
+  cases hint with
+  | none => simp [lowerBoundOk] at h
+  | some id =>
+    cases hD : s.db[id]? with
+    | none => simp [lowerBoundOk, hD] at h
+    | some D =>
+      cases lb with
+      | none =>
+        simp only [lowerBoundOk, hD, Bool.and_eq_true] at h
+        obtain ⟨hb, hc⟩ := h
+        exact StateInv_unsat hinv (Option.isNone_iff_eq_none.mp hb) hD hc
+      | some l =>
+        simp only [lowerBoundOk, hD, Bool.and_eq_true] at h
+        obtain ⟨hb, himpl⟩ := h
+        refine StateInv_lower hinv offset hD l (fun b hb' => ?_) himpl
+        rw [hb'] at hb
+        simpa using hb
+
+theorem upperBoundOk_sound (F : Array Constr) (obj : Objective)
+    (offset : Int) (best : Option Nat) (ub : Option Int)
+    (lits : Option (List VeriPB.OPBLit)) (hbw : BestWitnessed F obj best)
+    (h : upperBoundOk F obj offset best ub lits = true) :
+    formulaUpperBound F obj offset ub := by
+  cases ub with
+  | none => trivial
+  | some u =>
+    simp only [formulaUpperBound]
+    cases lits with
+    | none =>
+      cases hb : best with
+      | none => simp [upperBoundOk, hb] at h
+      | some b =>
+        simp only [upperBoundOk, hb, decide_eq_true_eq] at h
+        obtain ⟨ρ, hρ, hval⟩ := hbw b hb
+        exact ⟨ρ, hρ, by rw [hval]; exact h⟩
+    | some ls =>
+      cases hc : checkSolution F obj ls with
+      | none => simp [upperBoundOk, hc] at h
+      | some val =>
+        simp only [upperBoundOk, hc, decide_eq_true_eq] at h
+        obtain ⟨ρ, hρ, hval⟩ := checkSolution_sound F obj ls val hc
+        exact ⟨ρ, hρ, by rw [hval]; exact h⟩
+
+/-- Soundness of the conclusion evaluation on a state satisfying the
+invariant. -/
+theorem conclusionClaim_sound (s : BoolCheckState) (hinv : StateInv s)
+    (offset : Int) (step : VeriPB.ProofStep) (claim : Claim)
+    (h : conclusionClaim (fun id => s.db[id]?) s.origConstrs s.objective
+      offset s.best step = some claim) :
+    claim.holds s.origConstrs s.objective offset := by
+  cases step with
+  | conclusion id =>
+    cases hc : s.db[id]? with
+    | none => simp [conclusionClaim, hc] at h
+    | some c =>
+      by_cases hcon : c.isContra = true
+      · cases hb : s.best with
+        | none =>
+          simp only [conclusionClaim, hc, hcon, hb, if_true,
+            Option.some.injEq] at h
+          subst h
+          exact formulaUnsat_of_forall (StateInv_unsat hinv hb hc hcon)
+        | some b => simp [conclusionClaim, hc, hcon, hb] at h
+      · simp [conclusionClaim, hc, hcon] at h
+  | conclusionSat lits =>
+    by_cases hs : satOk s.origConstrs s.objective s.best lits = true
+    · simp only [conclusionClaim, hs, if_true, Option.some.injEq] at h
+      subst h
+      simp only [Claim.holds, formulaSatisfiable]
+      cases lits with
+      | none =>
+        simp only [satOk] at hs
+        obtain ⟨b, hb⟩ := Option.isSome_iff_exists.mp hs
+        obtain ⟨ρ, hρ, _⟩ := hinv.2 b hb
+        exact ⟨ρ, hρ⟩
+      | some ls =>
+        simp only [satOk] at hs
+        obtain ⟨val, hval⟩ := Option.isSome_iff_exists.mp hs
+        obtain ⟨ρ, hρ, _⟩ := checkSolution_sound _ _ ls val hval
+        exact ⟨ρ, hρ⟩
+    · simp [conclusionClaim, hs] at h
+  | conclusionBounds lb hint ub lits =>
+    by_cases hok : (lowerBoundOk (fun id => s.db[id]?) s.objective offset
+        s.best (boundOpt lb) hint &&
+        upperBoundOk s.origConstrs s.objective offset s.best (boundOpt ub)
+          lits) = true
+    · simp only [conclusionClaim] at h
+      rw [if_pos hok, Option.some.injEq] at h
+      subst h
+      simp only [Bool.and_eq_true] at hok
+      exact ⟨lowerBoundOk_sound hinv offset _ hint hok.1,
+        upperBoundOk_sound _ _ offset _ _ lits hinv.2 hok.2⟩
+    · simp only [conclusionClaim] at h
+      rw [if_neg hok] at h
+      cases h
+  | _ => simp [conclusionClaim] at h
+
+/-- Soundness of `proofClaim?`: the claimed result holds for the formula
+and the OPB objective `objVal objective + offset`. -/
+theorem proofClaim?_sound (constrs : Array Constr) (numVars : Nat)
+    (objective : Objective) (offset : Int) (names : List (String × Nat))
+    (proofStr : String) (claim : Claim)
+    (h : proofClaim? constrs numVars objective offset names proofStr =
+      some claim) :
+    claim.holds constrs objective offset := by
+  unfold proofClaim? at h
+  match hparse : VeriPB.parseVeriPBProofWith
+      (VeriPB.VarTable.ofList names numVars) proofStr with
+  | .error _ => simp [hparse] at h
+  | .ok proofData =>
+    simp only [hparse] at h
+    match hexec : execStepsFuel (pbcDepth proofData.steps.toList + 1)
+        (BoolCheckState.fromConstrs constrs (max numVars proofData.numVars)
+          objective offset)
+        proofData.steps.toList with
+    | some s =>
+      simp only [hexec] at h
+      obtain ⟨hinv, hF, hO⟩ := execStepsFuel_inv_preserve_fields _ _ s _
+        (StateInv_init constrs _ objective offset) hexec
+      have hF' : s.origConstrs = constrs := hF
+      have hO' : s.objective = objective := hO
+      match hlast : lastConclusion proofData.steps with
+      | some step =>
+        simp only [hlast] at h
+        rw [← hF', ← hO'] at h ⊢
+        exact conclusionClaim_sound s hinv offset step claim h
+      | none => simp [hlast] at h
+    | none => simp [hexec] at h
+
+/-- Soundness of the Boolean entry point used by `veripb_reflect` for SAT
+and BOUNDS conclusions. -/
+theorem checkProofClaim_sound (constrs : Array Constr) (numVars : Nat)
+    (objective : Objective) (offset : Int) (names : List (String × Nat))
+    (proofStr : String) (claim : Claim)
+    (h : checkProofClaimBool constrs numVars objective offset names proofStr
+      claim = true) :
+    claim.holds constrs objective offset :=
+  proofClaim?_sound constrs numVars objective offset names proofStr claim
+    (of_decide_eq_true h)
 
 /-! ## Decidable instance for native_decide -/
 
@@ -2614,6 +2890,25 @@ def mkNamesExpr (names : List (String × Nat)) : MetaM Expr := do
     mkApp4 (mkConst ``Prod.mk [.zero, .zero]) (mkConst ``String)
       (mkConst ``Nat) (mkStrLit s) (mkRawNatLit i))
 
+/-- `mkFormulaUnsatProof`, returning `none` if the checker rejects the
+proof. -/
+def mkFormulaUnsatProof? (tacName : Name) (constrsExpr numVarsExpr : Expr)
+    (proofStr : String) (ref? : Option Syntax) (objExpr : Expr)
+    (names : List (String × Nat)) : MetaM (Option Expr) := do
+  let constrsExpr ← instantiateMVars constrsExpr
+  let numVarsExpr ← instantiateMVars numVarsExpr
+  let objExpr ← instantiateMVars objExpr
+  let namesExpr ← if names.isEmpty then pure emptyNamesExpr
+    else mkNamesExpr names
+  let proofStrExpr := mkStrLit proofStr
+  let checkBoolExpr := mkApp5 (mkConst ``checkProofBool)
+    constrsExpr numVarsExpr objExpr namesExpr proofStrExpr
+  match ← Lean.Meta.nativeEqTrue tacName checkBoolExpr (axiomDeclRange? := ref?) with
+  | .success hEqTrue =>
+    return some <| mkApp6 (mkConst ``checkProof_sound)
+      constrsExpr numVarsExpr objExpr namesExpr proofStrExpr hEqTrue
+  | .notTrue => return none
+
 /-- Build a proof of `formulaUnsat constrs` from a VeriPB kernel proof.
 
 `constrsExpr : Array Constr`, `numVarsExpr : Nat` and `objExpr : Objective`
@@ -2636,21 +2931,70 @@ def mkFormulaUnsatProof (tacName : Name) (constrsExpr numVarsExpr : Expr)
     (proofStr : String) (ref? : Option Syntax := none)
     (objExpr : Expr := emptyObjectiveExpr)
     (names : List (String × Nat) := []) : MetaM Expr := do
+  match ← mkFormulaUnsatProof? tacName constrsExpr numVarsExpr proofStr ref?
+      objExpr names with
+  | some proof => return proof
+  | none => throwError "VeriPB reflection checker rejected the proof"
+
+/-- `Expr` of a claim. -/
+private def mkClaimExpr : Claim → Expr
+  | .unsat => mkConst ``Claim.unsat
+  | .sat => mkConst ``Claim.sat
+  | .bounds lb ub => mkApp2 (mkConst ``Claim.bounds) (toExpr lb) (toExpr ub)
+
+/-- Statement of a claim: `Claim.holds` unfolded one step. -/
+private def claimTypeExpr (constrsExpr objExpr offsetExpr : Expr) : Claim → Expr
+  | .unsat => mkApp (mkConst ``formulaUnsat) constrsExpr
+  | .sat => mkApp (mkConst ``formulaSatisfiable) constrsExpr
+  | .bounds lb ub => mkAppN (mkConst ``formulaBounds)
+      #[constrsExpr, objExpr, offsetExpr, toExpr lb, toExpr ub]
+
+/-- Build a proof of `claim.holds constrs obj offset` from a VeriPB kernel
+proof, by native evaluation of `checkProofClaimBool` (per-use axiom, as in
+`mkFormulaUnsatProof`). The arguments must be closed terms. -/
+def mkClaimProof (tacName : Name) (constrsExpr numVarsExpr objExpr offsetExpr : Expr)
+    (proofStr : String) (claim : Claim) (ref? : Option Syntax := none)
+    (names : List (String × Nat) := []) : MetaM Expr := do
   let constrsExpr ← instantiateMVars constrsExpr
   let numVarsExpr ← instantiateMVars numVarsExpr
   let objExpr ← instantiateMVars objExpr
+  let offsetExpr ← instantiateMVars offsetExpr
   let namesExpr ← if names.isEmpty then pure emptyNamesExpr
     else mkNamesExpr names
-  let proofStrExpr := mkStrLit proofStr
-  let checkBoolExpr := mkApp5 (mkConst ``checkProofBool)
-    constrsExpr numVarsExpr objExpr namesExpr proofStrExpr
+  let args := #[constrsExpr, numVarsExpr, objExpr, offsetExpr, namesExpr,
+    mkStrLit proofStr, mkClaimExpr claim]
+  let checkBoolExpr := mkAppN (mkConst ``checkProofClaimBool) args
   match ← Lean.Meta.nativeEqTrue tacName checkBoolExpr (axiomDeclRange? := ref?) with
-  | .success hEqTrue =>
-    return mkApp6 (mkConst ``checkProof_sound)
-      constrsExpr numVarsExpr objExpr namesExpr proofStrExpr hEqTrue
+  | .success hEqTrue => return mkAppN (mkConst ``checkProofClaim_sound) (args.push hEqTrue)
   | .notTrue => throwError "VeriPB reflection checker rejected the proof"
 
--- `veripb_reflect` command
+/-- The last `conclusion` line of a proof text is `conclusion UNSAT`. -/
+private def lastConclusionIsUnsat (proofStr : String) : Bool :=
+  let ls := (proofStr.splitOn "\n").filterMap fun l =>
+    let t := l.trimAscii.toString
+    if t.startsWith "conclusion" then some t else none
+  match ls.getLast? with
+  | some t => ((t.drop "conclusion".length).trimAscii.toString).startsWith "UNSAT"
+  | none => false
+
+/-- Human-readable form of a bound. -/
+private def showBound : Option Int → String
+  | none => "INF"
+  | some v => toString v
+
+/-- `veripb_reflect name "file.opb" "proof.pbp"` checks a VeriPB kernel proof
+by reflection and registers a theorem matching the proof's conclusion (which
+must close the proof: `output NONE ; conclusion ... ; end pseudo-Boolean
+proof ;`):
+* `conclusion UNSAT : id` (no logged solution): `name : formulaUnsat F`;
+* `conclusion SAT [: lits]`: `name : formulaSatisfiable F`;
+* `conclusion BOUNDS lb : id ub [: lits]`:
+  `name : formulaBounds F obj offset lb ub` (`INF` is `none`).
+The objective in the statement is the normalized min-form `objVal obj v +
+offset` (normalized nonnegative terms `obj`, constant `offset`). For
+`max: f` the parser negates the objective, so the statement is about `−f`:
+`lb` gives `f ≤ −lb` for every solution and `ub` gives a solution with
+`f ≥ −ub`. -/
 elab "veripb_reflect " n:ident
     ppSpace opbFile:str ppSpace proofFile:str : command => do
   let name := (← getCurrNamespace) ++ n.getId
@@ -2662,23 +3006,44 @@ elab "veripb_reflect " n:ident
     let inst ← match VeriPB.parseOPBNamed opbStr with
       | .ok r => pure r
       | .error e => throwError "OPB parse error: {e}"
-    let objective : Objective := match inst.objective with
-      | some o => o.terms
-      | none => []
+    let (objective, offset, fromMax) : Objective × Int × Bool :=
+      match inst.objective with
+      | some o => (o.terms, o.offset, o.fromMax)
+      | none => ([], 0, false)
     let constrsExpr ← mkConstrArrayExpr inst.constrs
     let numVarsExpr := mkRawNatLit inst.numVars
     let objExpr ← mkObjectiveExpr objective
-    let unsatType := mkApp (mkConst ``formulaUnsat) constrsExpr
-    let proof ← mkFormulaUnsatProof `veripb_reflect constrsExpr numVarsExpr
-      proofStr (ref? := some (← getRef)) (objExpr := objExpr)
-      (names := inst.names)
-    addAndCompile <| Declaration.thmDecl {
-      name
-      levelParams := []
-      type := unsatType
-      value := proof
-    }
-    Lean.logInfo m!"Registered {name} : formulaUnsat \
-      (checked via reflection)"
+    let offsetExpr := toExpr offset
+    let register (type value : Expr) (what : String) : TermElabM Unit := do
+      addAndCompile <| Declaration.thmDecl {
+        name
+        levelParams := []
+        type := type
+        value := value
+      }
+      Lean.logInfo m!"Registered {name} : {what} (checked via reflection)"
+    let maxNote := if fromMax then
+      " [max: objective, bounds on its negation]" else ""
+    -- UNSAT without solution logging: the established `checkProofBool` path
+    if lastConclusionIsUnsat proofStr then
+      if let some proof ← mkFormulaUnsatProof? `veripb_reflect
+          constrsExpr numVarsExpr proofStr (some (← getRef)) objExpr inst.names then
+        register (mkApp (mkConst ``formulaUnsat) constrsExpr) proof
+          "formulaUnsat"
+        return
+      -- rejected: `proofClaim?` below rejects it too (it can only differ if
+      -- the text scan and the parser disagree on the last conclusion)
+    match proofClaim? inst.constrs inst.numVars objective offset inst.names
+        proofStr with
+    | none => throwError "VeriPB reflection checker rejected the proof"
+    | some claim =>
+      let proof ← mkClaimProof `veripb_reflect constrsExpr numVarsExpr objExpr
+        offsetExpr proofStr claim (ref? := some (← getRef)) (names := inst.names)
+      let what := match claim with
+        | .unsat => "formulaUnsat"
+        | .sat => "formulaSatisfiable"
+        | .bounds lb ub =>
+          s!"formulaBounds, {showBound lb} ≤ objective ≤ {showBound ub}{maxNote}"
+      register (claimTypeExpr constrsExpr objExpr offsetExpr claim) proof what
 
 end VeriPB.Reflect

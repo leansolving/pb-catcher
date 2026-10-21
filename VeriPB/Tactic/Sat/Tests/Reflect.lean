@@ -122,6 +122,213 @@ veripb_reflect php21_obj_reflect
   "VeriPB/Tactic/Sat/Tests/data/php21_obj.opb"
   "VeriPB/Tactic/Sat/Tests/data/php21_kernel.pbp"
 
+/-! ## Conclusions SAT and BOUNDS
+
+`veripb_reflect` registers a theorem matching the proof's conclusion. The
+objective is the normalized min-form objective `objVal obj v + offset` (for
+`max: f` the bounds are on `−f`). All accepted proofs below are accepted by
+CakePB; VeriPB 3.0.1 rejects `vc6_bounds_ub_above` (ub above the best
+value), `vc6_sat_obj` (SAT with an objective) and `allfalse_empty_hint`
+(`conclusion SAT : ;`, no hint for VeriPB). The rejected variants are in
+Tests/Differential (verified and fast checkers) and below (the command). -/
+
+-- Minimum vertex cover of the 6-cycle with two chords: optimum 3.
+veripb_reflect vc6_bounds_reflect
+  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
+  "VeriPB/Tactic/Sat/Tests/data/vc6_linear_kernel.pbp"
+
+-- Optimum 3, attained: `(∃ v, FormulaSat F v ∧ objVal obj v + 0 = 3) ∧
+-- ∀ v, FormulaSat F v → 3 ≤ objVal obj v + 0`.
+open VeriPB.Reflect in
+example := formulaBounds_optimum vc6_bounds_reflect
+
+example := (vc6_bounds_reflect : VeriPB.Reflect.formulaBounds _ _ 0 (some 3) (some 3))
+
+-- The same proof with `soli ... : 3`, with the upper bound from the logged
+-- solution, without an upper bound, and with an upper bound above the best.
+veripb_reflect vc6_solval_reflect
+  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/vc6_solval_ok.pbp"
+
+veripb_reflect vc6_bounds_nolits_reflect
+  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/vc6_bounds_nolits.pbp"
+
+veripb_reflect vc6_bounds_noub_reflect
+  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/vc6_bounds_noub.pbp"
+
+veripb_reflect vc6_bounds_ub_above_reflect
+  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/vc6_bounds_ub_above.pbp"
+
+-- `conclusion UNSAT` after a logged solution of value 3: rejected (VeriPB
+-- and CakePB too), and `BOUNDS INF` on the same database likewise.
+/-- error: VeriPB reflection checker rejected the proof -/
+#guard_msgs in
+veripb_reflect vc6_fakeunsat_bad
+  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
+  "VeriPB/Tactic/Sat/Tests/data/vc6_fakeunsat_kernel.pbp"
+
+/-- error: VeriPB reflection checker rejected the proof -/
+#guard_msgs in
+veripb_reflect vc6_inf_after_soli_bad
+  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/vc6_inf_after_soli.pbp"
+
+-- SAT with a solution, on an instance with an objective.
+veripb_reflect vc6_sat_reflect
+  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/vc6_sat_obj.pbp"
+
+-- Objective with offset: min: -2 x1 -2 x2 -2 x3 (terms 2 ~x1 + 2 ~x2 + 2 ~x3,
+-- offset -6), optimum -2; `soli x1 ~x2 ~x3 : -2`.
+veripb_reflect off3_reflect
+  "VeriPB/Tactic/Sat/Tests/data/concl/off3.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/off3_ok.pbp"
+
+example := (off3_reflect : VeriPB.Reflect.formulaBounds _ _ (-6) (some (-2)) (some (-2)))
+
+-- Unsatisfiable instance with an objective: `BOUNDS INF : id INF` and a
+-- (vacuous) finite lower bound.
+veripb_reflect php21_obj_inf_reflect
+  "VeriPB/Tactic/Sat/Tests/data/php21_obj.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/php21_obj_inf.pbp"
+
+veripb_reflect php21_obj_lb_reflect
+  "VeriPB/Tactic/Sat/Tests/data/php21_obj.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/php21_obj_lb.pbp"
+
+-- SAT: a listed solution, and a logged solution.
+veripb_reflect sat3_hint_reflect
+  "VeriPB/Tactic/Sat/Tests/data/concl/sat3.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/sat3_hint.pbp"
+
+veripb_reflect sat3_sol_reflect
+  "VeriPB/Tactic/Sat/Tests/data/concl/sat3.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/sat3_sol.pbp"
+
+-- `conclusion SAT : ;` is the all-false assignment (as in CakePB), here a
+-- solution of `~x1 + ~x2 >= 1`.
+veripb_reflect allfalse_empty_hint_reflect
+  "VeriPB/Tactic/Sat/Tests/data/concl/allfalse.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/allfalse_empty_hint.pbp"
+
+example := (allfalse_empty_hint_reflect : VeriPB.Reflect.formulaSatisfiable _)
+
+-- VeriPB 3 test suite: BOUNDS INF, SAT after sol, bounds with offsets and a
+-- max: objective (the bounds refer to its negation).
+veripb_reflect conclusion_BOUNDS_infeasible_reflect
+  "VeriPB/Tactic/Sat/Tests/data/v3/conclusion_BOUNDS_infeasible.opb"
+  "VeriPB/Tactic/Sat/Tests/data/v3/conclusion_BOUNDS_infeasible_kernel.pbp"
+
+example := (conclusion_BOUNDS_infeasible_reflect :
+  VeriPB.Reflect.formulaBounds _ _ _ none none)
+
+veripb_reflect conclusion_SAT_sol_in_proof_reflect
+  "VeriPB/Tactic/Sat/Tests/data/v3/conclusion_SAT_sol_in_proof.opb"
+  "VeriPB/Tactic/Sat/Tests/data/v3/conclusion_SAT_sol_in_proof_kernel.pbp"
+
+veripb_reflect solution_logging_optional_value_reflect
+  "VeriPB/Tactic/Sat/Tests/data/v3/solution_logging_optional_value.opb"
+  "VeriPB/Tactic/Sat/Tests/data/v3/solution_logging_optional_value_kernel.pbp"
+
+veripb_reflect solution_logging_max_objective_reflect
+  "VeriPB/Tactic/Sat/Tests/data/v3/solution_logging_max_objective.opb"
+  "VeriPB/Tactic/Sat/Tests/data/v3/solution_logging_max_objective_kernel.pbp"
+
+-- `max: 2 x1 + 2 x2 + 2 x3` is `2 ~x1 + 2 ~x2 + 2 ~x3 - 6` in min form:
+-- the bounds -2, -2 say that the maximum of the original objective is 2.
+example := (solution_logging_max_objective_reflect :
+  VeriPB.Reflect.formulaBounds _ _ (-6) (some (-2)) (some (-2)))
+
+-- Rejected by the command (and by VeriPB and CakePB): wrong lower bound,
+-- wrong upper bound, wrong solution value, finite upper bound without a
+-- solution, SAT with a non-solution.
+/-- error: VeriPB reflection checker rejected the proof -/
+#guard_msgs in
+veripb_reflect vc6_lb_too_high_bad
+  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/vc6_lb_too_high.pbp"
+
+/-- error: VeriPB reflection checker rejected the proof -/
+#guard_msgs in
+veripb_reflect vc6_ub_low_bad
+  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/vc6_ub_low.pbp"
+
+/-- error: VeriPB reflection checker rejected the proof -/
+#guard_msgs in
+veripb_reflect vc6_solval_bad
+  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/vc6_solval_bad.pbp"
+
+/-- error: VeriPB reflection checker rejected the proof -/
+#guard_msgs in
+veripb_reflect off3_solval_bad
+  "VeriPB/Tactic/Sat/Tests/data/concl/off3.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/off3_solval_nooffset.pbp"
+
+/-- error: VeriPB reflection checker rejected the proof -/
+#guard_msgs in
+veripb_reflect php21_obj_lb_ub_bad
+  "VeriPB/Tactic/Sat/Tests/data/php21_obj.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/php21_obj_lb_ub.pbp"
+
+/-- error: VeriPB reflection checker rejected the proof -/
+#guard_msgs in
+veripb_reflect sat3_bad
+  "VeriPB/Tactic/Sat/Tests/data/concl/sat3.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/sat3_bad.pbp"
+
+-- `conclusion SAT : ;` and an upper bound `ub : ;` read as the all-false
+-- assignment, which is no solution here (CakePB rejects too; VeriPB
+-- rejects the SAT proof, no solution logged, and accepts the BOUNDS proof,
+-- where it uses the logged solution).
+/-- error: VeriPB reflection checker rejected the proof -/
+#guard_msgs in
+veripb_reflect sat3_empty_hint_bad
+  "VeriPB/Tactic/Sat/Tests/data/concl/sat3.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/sat3_empty_hint.pbp"
+
+/-- error: VeriPB reflection checker rejected the proof -/
+#guard_msgs in
+veripb_reflect vc6_ub_empty_hint_bad
+  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/vc6_ub_empty_hint.pbp"
+
+-- Footer placement: the conclusion must be the last step, directly after
+-- `output NONE`, and the only one (rejected by VeriPB and CakePB too).
+/-- error: VeriPB reflection checker rejected the proof -/
+#guard_msgs in
+veripb_reflect php21_concl_before_output_bad
+  "VeriPB/Tactic/Sat/Tests/data/php21.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/php21_concl_before_output.pbp"
+
+/-- error: VeriPB reflection checker rejected the proof -/
+#guard_msgs in
+veripb_reflect php21_concl_no_output_bad
+  "VeriPB/Tactic/Sat/Tests/data/php21.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/php21_concl_no_output.pbp"
+
+/-- error: VeriPB reflection checker rejected the proof -/
+#guard_msgs in
+veripb_reflect php21_concl_twice_bad
+  "VeriPB/Tactic/Sat/Tests/data/php21.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/php21_concl_twice.pbp"
+
+/-- error: VeriPB reflection checker rejected the proof -/
+#guard_msgs in
+veripb_reflect php21_concl_not_last_bad
+  "VeriPB/Tactic/Sat/Tests/data/php21.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/php21_concl_not_last.pbp"
+
+/-- error: VeriPB reflection checker rejected the proof -/
+#guard_msgs in
+veripb_reflect sat3_concl_before_output_bad
+  "VeriPB/Tactic/Sat/Tests/data/concl/sat3.opb"
+  "VeriPB/Tactic/Sat/Tests/data/concl/sat3_concl_before_output.pbp"
+
 /-! ## Solution logging (`soli`) and the optimization invariant
 
 The checker runs step by step, the verified `execStepsFuel` and the fast

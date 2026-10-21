@@ -1,0 +1,13 @@
+pseudo-Boolean proof version 3.0
+f 8;
+rup >= 0 : ~ ;
+soli ~x1 x2 ~x3 x4 ~x5 x6;
+pol 9 10 1000000000000000 * + 1 1000000000000000 * + 3 1000000000000000 * + 5 1000000000000000 * +;
+pol 10 9 +;
+rup 1 x1 1 x2 1 x3 1 x4 1 x5 1 x6 >= 0 : ~ ;
+pol 13 9 +;
+deld 13;
+rup 1 x1 1 x2 1 x3 1 x4 1 x5 1 x6 >= 3 : 11;
+output NONE ;
+conclusion SAT : ~x1 x2 ~x3 x4 ~x5 x6;
+end pseudo-Boolean proof;

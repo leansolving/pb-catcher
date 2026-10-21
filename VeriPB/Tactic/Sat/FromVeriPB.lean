@@ -1052,17 +1052,16 @@ partial def parseStep (ctx : StepCtx) : ParseM ProofStep := do
       expect ":"
       let lits ← parseSolLits
       expectSemicolon
-      -- `conclusion SAT : ;` has no hint (parser.rs `conclusion_sat`)
-      return .conclusionSat (if lits.isEmpty then none else some lits)
+      -- `conclusion SAT : ;` is the all-false assignment, as in CakePB
+      -- (`parse_assg [] = SOME []`); VeriPB reads it as no hint
+      return .conclusionSat (some lits)
     | "BOUNDS" =>
       let lb ← parseBound
       let lbHint ← if ← accept ":" then some <$> parseNat else pure none
       let ub ← parseBound
-      -- `ub : ;` has no hint (parser.rs `conclusion_bounds`)
-      let ubLits ← if ← accept ":" then do
-          let lits ← parseSolLits
-          pure (if lits.isEmpty then none else some lits)
-        else pure none
+      -- `ub : ;` is the all-false assignment, as in CakePB
+      -- (`parse_assg [] = SOME []`); VeriPB reads it as no hint
+      let ubLits ← if ← accept ":" then some <$> parseSolLits else pure none
       expectSemicolon
       return .conclusionBounds lb lbHint ub ubLits
     | "NONE" =>

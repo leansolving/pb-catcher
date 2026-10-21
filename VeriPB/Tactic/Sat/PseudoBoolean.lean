@@ -356,23 +356,23 @@ theorem evalSum_stripZero (v : Valuation) (ts : List Term) :
     by_cases ha : a = 0 <;> simp [stripZero, ha, evalSum, ih]
 
 /-- `x / k = q` from `x = k * q + s` with `s < k`. -/
-theorem div_eq_of_decomp {k q s x : Nat} (hk : 0 < k) (hs : s < k) (hx : x = k * q + s) :
+private theorem div_eq_of_decomp {k q s x : Nat} (hk : 0 < k) (hs : s < k) (hx : x = k * q + s) :
     x / k = q :=
   ((Nat.div_mod_unique (d := q) (c := s) hk).mpr ⟨by omega, hs⟩).1
 
 /-- `x % k = s` from `x = k * q + s` with `s < k`. -/
-theorem mod_eq_of_decomp {k q s x : Nat} (hk : 0 < k) (hs : s < k) (hx : x = k * q + s) :
+private theorem mod_eq_of_decomp {k q s x : Nat} (hk : 0 < k) (hs : s < k) (hx : x = k * q + s) :
     x % k = s :=
   ((Nat.div_mod_unique (d := q) (c := s) hk).mpr ⟨by omega, hs⟩).2
 
 /-- `⌈a/k⌉·k` is below `a + k`. -/
-theorem ceilDiv_mul_lt (a k : Nat) (hk : 0 < k) : ceilDiv a k * k < a + k := by
+private theorem ceilDiv_mul_lt (a k : Nat) (hk : 0 < k) : ceilDiv a k * k < a + k := by
   unfold ceilDiv
   have := Nat.div_mul_le_self (a + k - 1) k
   omega
 
 /-- `⌈a/k⌉ = ⌊a/k⌋ + 1` when `k` does not divide `a`. -/
-theorem ceilDiv_of_mod_pos (a k : Nat) (hk : 0 < k) (h : 0 < a % k) :
+private theorem ceilDiv_of_mod_pos (a k : Nat) (hk : 0 < k) (h : 0 < a % k) :
     ceilDiv a k = a / k + 1 := by
   unfold ceilDiv
   have e := Nat.div_add_mod a k
