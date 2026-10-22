@@ -15,8 +15,9 @@ Three-layer design mirroring LRAT:
 | Layer | File | Description |
 |-------|------|-------------|
 | Kernel | `VeriPB/Tactic/Sat/PseudoBoolean.lean` | PB constraint types, evaluation, soundness lemmas |
+| Kernel | `VeriPB/Tactic/Sat/Dominance.lean` | Order semantics and soundness theorems of the dominance rule |
 | Metaprogram | `VeriPB/Tactic/Sat/FromVeriPB.lean` | Parser, normalization, `Expr`-level proof construction |
-| Reflection | `VeriPB/Tactic/Sat/ReflectCheck.lean` | Verified checker definitions (pol, RUP, redundance goals) |
+| Reflection | `VeriPB/Tactic/Sat/ReflectCheck.lean` | Verified checker definitions (pol, RUP, redundance, dominance and order goals) |
 | Reflection | `VeriPB/Tactic/Sat/ReflectFast.lean` | Runtime implementation of the checker (`@[implemented_by]`) |
 | Reflection | `VeriPB/Tactic/Sat/Reflect.lean` | `checkProofBool`, `proofClaim?`, soundness proofs, `veripb_reflect`, `mkFormulaUnsatProof` |
 
