@@ -832,6 +832,12 @@ inductive StepCtx where
   | top | subproof | scope | proofgoal | proof | spec
   deriving BEq, Inhabited
 
+/-- A `red` step (either constructor): the only statement allowed in the
+`spec` block of a `def_order`. -/
+def isSpecRedStep : ProofStep → Bool
+  | .red .. | .strengthening .red .. => true
+  | _ => false
+
 /-- `red`/`dom` with an optional subproof. A subproof that consists of
 `proofgoal` blocks with hints and ends with a plain `qed ;` gives the
 `red`/`dom` constructor, every other subproof `strengthening`. -/
@@ -895,6 +901,9 @@ partial def parseDefOrder (name : String) : ParseM (OrderDef ProofStep) := do
   expectSemicolon
   let spec ← if ← accept "spec" then do
       let items ← parseItems .spec "end"
+      -- CakePB `parse_spec_aux`: only `red` steps (VeriPB accepts any rule)
+      if !items.all isSpecRedStep then
+        throw "def_order: a spec block may contain only red steps"
       expect "end"
       let _ ← accept "spec"
       expectSemicolon
@@ -903,10 +912,11 @@ partial def parseDefOrder (name : String) : ParseM (OrderDef ProofStep) := do
   expect "def"
   let mut defConstrs : List OPBConstr := []
   while (← peek) != "end" do
-    -- VeriPB `single_constraint`: the `≥` part, or the `≤` part for `<=`
+    -- VeriPB `single_constraint`: the `≥` part, or the `≤` part for `<=`;
+    -- `=` is rejected (VeriPB `order_def_constraint`, CakePB `parse_def_aux`)
     match ← parseRelConstr with
-    | c :: _ => defConstrs := defConstrs ++ [c]
-    | [] => pure ()
+    | [c] => defConstrs := defConstrs ++ [c]
+    | _ => throw "def_order: '=' is not allowed in a def block"
   expect "end"
   let _ ← accept "def"
   expectSemicolon
@@ -928,14 +938,16 @@ partial def parseDefOrder (name : String) : ParseM (OrderDef ProofStep) := do
       let _ ← accept "transitivity"
       expectSemicolon
       pure (some { freshRight, freshAux1, freshAux2, proof : OrderTransitivity ProofStep })
-    else pure none
+    -- both blocks are mandatory (CakePB `parse_trans_refl_block`; VeriPB
+    -- cannot autoprove transitivity and its elaborator always writes both)
+    else throw "def_order: missing transitivity block"
   let reflexivity ← if ← accept "reflexivity" then do
       let proof ← parseOrderProof
       expect "end"
       let _ ← accept "reflexivity"
       expectSemicolon
       pure (some proof)
-    else pure none
+    else throw "def_order: missing reflexivity block"
   expect "end"
   let _ ← accept "def_order"
   expectSemicolon

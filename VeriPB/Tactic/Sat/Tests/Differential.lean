@@ -36,6 +36,23 @@ def showConstr (c : Constr) : String :=
     | .neg v => s!"{a}·~x{v}"
   s!"{ts} ≥ {c.degree}"
 
+def constrListEq (a b : List Constr) : Bool :=
+  a.length == b.length && (a.zip b).all fun (x, y) => constrEq x y
+
+/-- Structural equality of two stored orders (`OrderData` derives no `BEq`). -/
+def orderEq (a b : Sat.PB.Dominance.OrderData) : Bool :=
+  a.left == b.left && a.right == b.right && a.aux == b.aux &&
+    constrListEq a.spec b.spec && constrListEq a.defs b.defs
+
+def ordersEq (a b : List (String × Sat.PB.Dominance.OrderData)) : Bool :=
+  a.length == b.length && (a.zip b).all fun ((n1, o1), (n2, o2)) => n1 == n2 && orderEq o1 o2
+
+def ordEq : Option (Sat.PB.Dominance.OrderData × List Sat.PB.Literal) →
+    Option (Sat.PB.Dominance.OrderData × List Sat.PB.Literal) → Bool
+  | none, none => true
+  | some (o1, z1), some (o2, z2) => orderEq o1 o2 && z1 == z2
+  | _, _ => false
+
 /-- A core id set as a sorted list (insertion order does not matter). -/
 def sortedIds (s : Std.HashSet Nat) : List Nat := s.toList.mergeSort (· ≤ ·)
 
@@ -117,6 +134,8 @@ def runOneClaim (name opbPath proofPath : String) (fullEvery : Nat := 1)
       if s.s2c != f.s2c || sortedIds s.coreIds != sortedIds f.coreIds then
         throw (IO.userError s!"{name}: MISMATCH at step {k}: core sets \
           {sortedIds s.coreIds} vs {sortedIds f.coreIds}")
+      if !ordersEq s.orders f.orders || !ordEq s.ord f.ord then
+        throw (IO.userError s!"{name}: MISMATCH at step {k}: stored or loaded orders")
       let diff? : Option String := Id.run do
         if s.db.size != f.db.size then
           return some s!"db size differs: verified {s.db.size} vs fast {f.db.size}"
@@ -181,6 +200,26 @@ def runExpect (name opbPath proofPath : String) (expected : Option Claim) :
   if c != expected then
     throw (IO.userError s!"{name}: claim {repr c}, expected {repr expected}")
 
+/-- The proof must be rejected by the parser (and so by the runtime entry
+point `proofClaimFast?`). -/
+def expectParseError (name opbPath proofPath : String) : IO Unit := do
+  let opbStr ← IO.FS.readFile opbPath
+  let proofStr ← IO.FS.readFile proofPath
+  let inst ← match VeriPB.parseOPBNamed opbStr with
+    | .ok r => pure r
+    | .error e => throw (IO.userError s!"{name}: OPB parse error: {e}")
+  let obj : Objective := match inst.objective with
+    | some o => o.terms
+    | none => []
+  match VeriPB.parseVeriPBProofWith
+      (VeriPB.VarTable.ofList inst.names inst.numVars) proofStr with
+  | .ok _ => throw (IO.userError s!"{name}: parsed, expected a parse error")
+  | .error e =>
+    if (Fast.proofClaimFast? inst.constrs inst.numVars obj 0 inst.names
+        proofStr).isSome then
+      throw (IO.userError s!"{name}: proofClaimFast? accepts an unparsable proof")
+    IO.println s!"{name}: parse error as expected: {e}"
+
 end VeriPB.Tests.Differential
 
 open VeriPB.Tests.Differential VeriPB.Reflect in
@@ -213,10 +252,9 @@ open VeriPB.Tests.Differential VeriPB.Reflect in
     runOne n (d ++ "vc6.opb") (d ++ n ++ "_kernel.pbp") (expectReject := some k)
   -- VeriPB 3 test-suite pairs (Tests/data/v3, kernel proofs by `veripb
   -- --elaborate`). Accepted by CakePB except solution_logging_max_objective
-  -- (CakePB cannot parse `max:`). The expected rejections are statements the
-  -- checker does not support yet (output claims, loading an order, dominance, obji/eobj/obju)
-  -- and strengthening_to_core with a derived constraint touched by the
-  -- witness (database goals range over the whole database, see Reflect).
+  -- (CakePB cannot parse `max:`).
+  -- strengthening_to_core: the witness touches a constraint derived
+  -- after `strengthening_to_core on`; database goals range over the core only.
   let v := d ++ "v3/"
   for n in ["all_diff", "card_propagation_assert_negative_rhs",
       "conclusion_BOUNDS_infeasible", "conclusion_SAT_sol_in_proof", "delete_core",
@@ -225,7 +263,7 @@ open VeriPB.Tests.Differential VeriPB.Reflect in
       "variable_form_division", "normalized_mir_cut", "variable_form_mir_cut",
       "rup_objective_constant_term",
       "solution_logging_improving_optimal_optional_value", "solution_logging_max_objective",
-      "solution_logging_optional_value"] do
+      "solution_logging_optional_value", "strengthening_to_core"] do
     runOne n (v ++ n ++ ".opb") (v ++ n ++ "_kernel.pbp")
   -- `obji` (P2b): the bound comes from the asserted value, the witness from
   -- the conclusion solution
@@ -238,7 +276,7 @@ open VeriPB.Tests.Differential VeriPB.Reflect in
       (some (.bounds (some 2) (some 2)))
   runExpect "move_to_core_indexing" (v ++ "move_to_core_indexing.opb")
     (v ++ "move_to_core_indexing_kernel.pbp") none
-  -- output claims (B3): accepted as footers (bound-side preconditions), the
+  -- output claims: accepted as footers (bound-side preconditions), the
   -- theorem is the conclusion's
   runExpect "decision_output" (v ++ "decision_output.opb")
     (v ++ "decision_output_kernel.pbp") none
@@ -259,11 +297,11 @@ open VeriPB.Tests.Differential VeriPB.Reflect in
       ("concl/sat3.opb", "sat3_out_equiopt", none),  -- EQUIOPTIMAL needs an objective
       ("php21.opb", "php21_out_derivable", some Claim.unsat)] do
     runExpect n (d ++ o) (d ++ "concl/" ++ n ++ ".pbp") c
-  -- rejected at dominance (P3)
-  for (n, k) in [("dominance_simple_order", 2),
-      ("dominance_with_aux_vars", 2),
-      ("strengthening_to_core", 3)] do
-    runOne n (v ++ n ++ ".opb") (v ++ n ++ "_kernel.pbp") (expectReject := some k)
+  -- orders and dominance: def_order, load_order, dom, and red with the
+  -- order goals; all accepted by VeriPB 3.0.1 and CakePB
+  for n in ["dominance_simple_order", "dominance_with_aux_vars",
+      "redundance_non_touching_order", "dominance_load_order_literal"] do
+    runOne n (v ++ n ++ ".opb") (v ++ n ++ "_kernel.pbp")
   -- Hand-written tests for the T3 statements (Tests/data/t3). Every accepted
   -- proof is accepted by VeriPB 3.0.1 and CakePB (core_range: VeriPB only,
   -- CakePB cannot parse `core range`); every rejected one is rejected by
@@ -308,6 +346,149 @@ open VeriPB.Tests.Differential VeriPB.Reflect in
       ("base4", "core_id_missing", 1),        -- core id 9 (no such constraint)
       ("base4", "core_range_lo", 4)] do       -- core range 5 6 covers 5: deld 5 rejected
     runOne n (t ++ o ++ ".opb") (t ++ n ++ ".pbp") (expectReject := some k)
+  -- strengthening_to_core (Tests/data/s2c): `red` database goals range
+  -- over the core only while it is on; the "goal already in the database"
+  -- lookup sees the whole database (CakePB `check_red`). Verdicts of VeriPB
+  -- 3.0.1 / CakePB in the comments; every proof is accepted by VeriPB (it
+  -- autoproves missing goals and, F1, does not move constraints to the core).
+  let sc := d ++ "s2c/"
+  for (o, n) in [("s2c4", "s2c_skip_derived"),  -- derived pol skipped, red result's goal proved
+      ("s2c4", "s2c_moved_goal"),               -- red result derived before `on`, its goal proved
+      ("s2c_lookup", "s2c_lookup_derived"),     -- core goal equal to a derived constraint
+      ("s2c4", "s2c_goal_derived_id")] do       -- proofgoal for a derived id (resolved in the whole db)
+    runOne n (sc ++ o ++ ".opb") (sc ++ n ++ ".pbp")
+  for (o, n, k) in [("s2c4", "s2c_red_core_nogoal", 4),  -- red result is core: goal 5 missing
+      ("s2c4", "s2c_off_derived", 5),           -- after `off` the derived pol needs a goal
+      ("s2c4", "s2c_moved_nogoal", 3)] do       -- `on` moved the red result to the core
+    runOne n (sc ++ o ++ ".opb") (sc ++ n ++ ".pbp") (expectReject := some k)
+  -- orders (Tests/data/order; all on ord4.opb). Verdicts of VeriPB
+  -- 3.0.1 / CakePB in the comments. order_ok defines lex2 (no aux) and
+  -- ordaux (spec block, fresh aux lists), loads, unloads, reloads with a
+  -- negated literal, unloads, then runs a `red` (both accept).
+  let od := d ++ "order/"
+  runOne "order_ok" (od ++ "ord4.opb") (od ++ "order_ok.pbp")
+  -- accepted by both: a spec block with one red (positive control for
+  -- order_spec_noacc), a def_order while an order is loaded, and the same
+  -- name defined twice where only the newest definition fits `load_order`
+  for n in ["order_spec_one", "order_loaded_def", "order_redef_last",
+      "order_red_loaded"] do  -- `red` with an untouched witness while loaded
+    runOne n (od ++ "ord4.opb") (od ++ n ++ ".pbp")
+  -- parse errors (CakePB parity): no reflexivity block (VeriPB accepts),
+  -- `=` in def (both reject), a `pol` in the spec block (both reject)
+  for n in ["order_noreflex", "order_eq_def", "order_spec_pol"] do
+    expectParseError n (od ++ "ord4.opb") (od ++ n ++ ".pbp")
+  for (n, k) in [("order_trans_fresh", 1),  -- fresh_right u1 u2 (w := u): CakePB
+                                            -- `check_ws` rejects, VeriPB accepts
+      ("order_trans_fail", 1),              -- proofgoal #1 derives no contradiction (both reject)
+      ("order_refl_sees_trans", 1),         -- reflexivity proof uses a transitivity premise id (both reject)
+      ("order_spec_noacc", 1),              -- second spec red leaves the first spec goal unproved (both reject)
+      ("order_load_arity", 2),              -- one literal for two left variables (both reject)
+      ("order_load_aux", 2),                -- literal over the aux variable $a1 (both reject)
+      ("order_unload_none", 2)] do          -- `load_order ;` with no order loaded
+                                            -- (CakePB rejects, VeriPB accepts)
+    runOne n (od ++ "ord4.opb") (od ++ n ++ ".pbp") (expectReject := some k)
+  -- dominance (Tests/data/dom). lex2 (no aux) on sym4.opb, leaux (one
+  -- bit, aux $a with a spec block) on dom3.opb, lex2 with an objective on
+  -- obj3b.opb (obj3c.opb: the objective goal fails). Verdicts of VeriPB
+  -- 3.0.1 / CakePB in the comments.
+  let dd := d ++ "dom/"
+  -- accepted by both
+  for (o, n) in [("sym4", "dom_simple"),        -- strict goal proved outside any scope
+      ("sym4", "dom_strict_geq"),               -- strict goal proved in scope geq
+      ("sym4", "dom_qed"),                      -- two doms closed by qed : id
+      ("sym4", "dom_s2c"),                      -- dom under strengthening_to_core
+      ("sym4", "dom_deld"),                     -- without s2c the dom result is derived (deld)
+      ("dom3", "dom_aux_scopes"),               -- order goal and core goal in scope leq, strict in geq
+      ("dom3", "dom_aux_outside"),              -- core goal proved outside any scope
+      ("dom3", "dom_aux_extra_db"),             -- twin of dom_aux_fresh_db without the aux variable
+      ("obj3b", "dom_obj"),                     -- objective goal proved outside any scope
+      ("obj3b", "dom_obj_leq"),                 -- objective goal proved in scope leq
+      ("dom4", "dom_aux_scopes4"),              -- dom_aux_scopes on dom4 (x4 unconstrained)
+      ("dom3", "dom_aux_qed"),                  -- closed by qed : id, no aux variable anywhere
+      ("dom3", "dom_aux_extra_db_qed"),         -- twin of dom_aux_fresh_db_qed without the aux variable
+      ("dom3", "dom_two_leq"),                  -- two scope leq blocks and a scope geq block
+      ("domobj4", "dom_obj_nofresh")] do        -- twin of dom_aux_fresh_obj with x4 for $a
+    runOne n (dd ++ o ++ ".opb") (dd ++ n ++ ".pbp")
+  -- scope inside a scope (both reject)
+  expectParseError "dom_nested_scope" (dd ++ "sym4.opb") (dd ++ "dom_nested_scope.pbp")
+  for (o, p, n, k) in [("sym4", "dom_nostrict", "dom_nostrict", 3),  -- strict goal missing (both reject)
+      ("sym4", "dom_noorder", "dom_noorder", 2),           -- no order loaded (both reject)
+      ("sym4", "dom_unloaded", "dom_unloaded", 4),         -- order unloaded before the dom (both reject)
+      ("sym4", "dom_strict_leq", "dom_strict_leq", 3),     -- strict goal proved in scope leq (both reject)
+      ("sym4", "dom_qed_scope", "dom_qed_scope", 3),       -- qed : id names a scope-derived id (both reject)
+      ("sym4", "dom_s2c_deld", "dom_s2c_deld", 5),         -- under s2c the dom result is core (both reject)
+      ("dom3", "dom_aux_core_geq", "dom_aux_core_geq", 3), -- core goal proved in scope geq (both reject)
+      ("dom3", "dom_aux_core_missing", "dom_aux_core_missing", 3),  -- core goal missing
+                                                           -- (CakePB rejects, VeriPB autoproves)
+      ("dom3", "dom_aux_order_geq", "dom_aux_order_geq", 3),  -- order goal proved in scope geq (both reject)
+      ("dom3", "dom_aux_fresh_db", "dom_aux_fresh_db", 4),  -- aux variable in a database constraint
+                                                           -- (CakePB rejects, VeriPB accepts)
+      ("dom4", "dom_aux_fresh_wit", "dom_aux_fresh_wit", 3),  -- witness entry x4 -> $a (F4; twin of
+                                                           -- dom_aux_scopes4; CakePB rejects, VeriPB accepts)
+      ("dom3", "dom_aux_fresh_c", "dom_aux_fresh_c", 3),   -- aux variable in the dom constraint (F2;
+                                                           -- twin dom_aux_qed; CakePB rejects, VeriPB accepts)
+      ("dom3", "dom_aux_fresh_db_qed", "dom_aux_fresh_db_qed", 4),  -- aux variable in a database
+                                                           -- constraint, dom closed by qed : id (F1 is
+                                                           -- checked anyway; CakePB rejects, VeriPB accepts)
+      ("domobj4", "dom_aux_fresh_obj", "dom_aux_fresh_obj", 7),  -- aux variable in the objective after
+                                                           -- obju (F3; CakePB rejects, VeriPB accepts)
+      ("obj3b", "dom_obj_geq", "dom_obj_geq", 3),          -- objective goal proved in scope geq (both reject)
+      ("obj3b", "dom_obj_missing", "dom_obj_missing", 3),  -- objective goal missing
+                                                           -- (CakePB rejects, VeriPB autoproves)
+      ("obj3c", "dom_obj", "dom_obj_fail", 3)] do          -- objective goal fails (both reject)
+    runOne n (dd ++ o ++ ".opb") (dd ++ p ++ ".pbp") (expectReject := some k)
+  -- redundance and deletion under a loaded order (Tests/data/order).
+  -- lex2 on red3.opb / delc2.opb / objord3.opb (loaded x1 x2), leaux (aux
+  -- $a, spec block) on aux3.opb (loaded x1), lex1 on lex1x2.opb (x1) and
+  -- objred4.opb (x4). Verdicts of VeriPB 3.0.1 / CakePB in the comments.
+  for (o, n) in [("red3", "red_ord_goal"),     -- order goal #2 proved outside any scope
+      ("red3", "red_ord_untouched"),            -- witness untouched by the order: no order goal
+      ("red3", "red_ord_identity"),             -- identity entry x1 -> x1 touches; trivial order goal
+      ("aux3", "red_ord_scope"),                -- order goal #2 and db goal 2 proved in scope leq
+      ("aux3", "red_ord_scope_extra"),          -- twin of red_ord_scope_auxdb without the aux
+      ("aux3", "red_ord_qed_auxdb"),            -- $a in a derived constraint, red closed by qed : id:
+                                                -- freshness skipped (CakePB)
+      ("aux3", "red_ord_identity_aux_ok"),      -- identity entry x1 -> x1 touches, order goal #2
+                                                -- proved in scope leq (both accept)
+      ("aux3", "delc_ord_auxdb_ok"),            -- twin of delc_ord_auxdb without the aux
+                                                -- (both accept)
+      ("delc2", "delc_ord_goal"),               -- checked delc, order goal #2 proved
+      ("red3", "delc_ord_unchecked_core"),      -- plain delc while loaded, every constraint core
+      ("red3", "delc_ord_unchecked_derived_ok"),  -- the derived constraint deleted first (deld)
+      ("objord3", "obju_ord"),                  -- obju while loaded (goal #2 over the core), then red
+      ("lex1x2", "red_ord_unsound_dom"),        -- positive control of red_ord_unsound: the dom alone
+      ("objred4", "red_ord_obj"),               -- objective goal #3 (= #k+2) proved
+      ("objconst3", "obju_const")] do           -- obju to the constant 0, then red (no order)
+    runOne n (od ++ o ++ ".opb") (od ++ n ++ ".pbp")
+  for (o, n, k) in [("red3", "red_ord_goal_missing", 3),  -- order goal #2 missing
+                                                -- (CakePB rejects, VeriPB autoproves)
+      ("aux3", "red_ord_scope_geq", 3),         -- scope geq in a red (both reject)
+      ("aux3", "red_ord_scope_noorder", 3),     -- order goal #2 missing (both reject)
+      ("aux3", "red_ord_scope_auxdb", 4),       -- $a in a derived constraint, red with a scope (F1;
+                                                -- CakePB rejects, VeriPB accepts)
+      ("aux3", "red_ord_identity_aux", 3),      -- identity entry x1 -> x1 touches, the non-trivial
+                                                -- order goal #2 missing (CakePB rejects, VeriPB
+                                                -- autoproves)
+      ("aux3", "delc_ord_auxdb", 4),            -- $a in a derived constraint, touching checked delc
+                                                -- of core constraint 1 with goal #2 proved: F1
+                                                -- runs over the database minus the deleted id,
+                                                -- derived constraints included (CakePB rejects,
+                                                -- VeriPB accepts)
+      ("delc2", "delc_ord_missing", 3),         -- checked delc without the order goal
+                                                -- (CakePB rejects, VeriPB autoproves)
+      ("red3", "delc_ord_unchecked_derived", 4),  -- plain delc while loaded with a derived
+                                                -- constraint (CakePB rejects, VeriPB accepts)
+      ("objord3", "obju_ord_fail", 3),          -- obju to x1 + x3: goal #2 fails (both reject)
+      ("lex1x2", "red_ord_unsound", 3),         -- red x1 >= 1 : x1 -> 1 raises the order key; an
+                                                -- order-unaware red would let the dom and rup
+                                                -- prove UNSAT of a satisfiable formula (both reject)
+      ("objred4", "red_ord_obj_wrongid", 3),    -- the objective goal proved as #2 (the order
+                                                -- goal): #3 uncovered (CakePB rejects, VeriPB
+                                                -- autoproves)
+      ("objconst3", "obju_const_goal", 2)] do   -- known difference: after obju to a constant the
+                                                -- objective has no terms and #2 is no goal id
+                                                -- (both references accept the trivial goal)
+    runOne n (od ++ o ++ ".opb") (od ++ n ++ ".pbp") (expectReject := some k)
   -- pol cuts `k c`, `k n`, `k m` (Tests/data/polcut, written by
   -- testcampaign/t3b/handgen.py). polcut_ok applies every cut to five
   -- constraints (negative variable-form degree, remainder 0, k = 1, k above

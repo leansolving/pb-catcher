@@ -1,0 +1,50 @@
+pseudo-Boolean proof version 3.0
+f 3;
+def_order leaux
+	vars
+		left u1;
+		right v1;
+		aux $a;
+	end;
+spec
+red 1 u1 1 ~$a >= 1 : $a -> 0 : subproof
+qed;
+red 1 ~v1 1 ~$a >= 1 : $a -> 0 : subproof
+qed;
+red 1 ~u1 1 v1 1 $a >= 1 : $a -> 1 : subproof
+qed;
+	end;
+	def
+		1 ~$a >= 1;
+	end;
+	transitivity
+	vars
+		fresh_right w1;
+		fresh_aux_1 $b;
+		fresh_aux_2 $c;
+	end;
+	proof
+	proofgoal #1
+rup >= 1 : 10 11 12 7 8 3 6;
+	qed : 13;
+qed;
+	end;
+	reflexivity
+	proof
+	proofgoal #1
+rup >= 1 : 17 14 15;
+	qed : 18;
+qed;
+	end;
+end;
+load_order leaux x1;
+red 1 ~x1 1 x2 >= 1 : x1 -> x2 x2 -> x1 : subproof
+	scope leq
+	proofgoal 2
+rup >= 1 : 4 3 8;
+	qed : 9;
+	end;
+qed;
+output NONE ;
+conclusion NONE;
+end pseudo-Boolean proof;

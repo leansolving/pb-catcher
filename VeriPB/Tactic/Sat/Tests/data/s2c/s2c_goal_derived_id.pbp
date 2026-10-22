@@ -1,0 +1,12 @@
+pseudo-Boolean proof version 3.0
+f 2 ;
+strengthening_to_core on ;
+pol 1 2 + ;
+red 1 x1 >= 1 : x1 -> 1 : subproof
+	proofgoal 3
+		pol 2 2 * 5 + ;
+	qed : 6 ;
+qed ;
+output NONE ;
+conclusion NONE ;
+end pseudo-Boolean proof ;

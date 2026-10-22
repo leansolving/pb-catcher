@@ -9,6 +9,7 @@ import VeriPB.Tactic.Sat.FromVeriPB
 import VeriPB.Tactic.Sat.ReflectCheck
 import VeriPB.Tactic.Sat.ReflectFast
 import VeriPB.Tactic.Sat.Reflect
+import VeriPB.Tactic.Sat.Dominance
 
 -- Tests (kernel rules + reflection checker)
 import VeriPB.Tactic.Sat.Tests.Basic

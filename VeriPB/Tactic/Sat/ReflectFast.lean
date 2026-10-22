@@ -76,6 +76,8 @@ structure FBoolCheckState where
   formulaSize : Nat
   coreIds : Std.HashSet Nat := {}
   s2c : Bool := false
+  orders : List (String × Sat.PB.Dominance.OrderData) := []
+  ord : Option (Sat.PB.Dominance.OrderData × List Sat.PB.Literal) := none
   deriving Inhabited
 
 /-- `true` iff the term list is a block: no zero coefficient, no repeated
@@ -518,7 +520,9 @@ def FBoolCheckState.fromConstrs (constrs : Array Constr)
     numVars := numVars
     formulaSize := constrs.size
     coreIds := (List.range constrs.size).foldl (fun s i => s.insert (i + 1)) {}
-    s2c := false }
+    s2c := false
+    orders := []
+    ord := none }
 
 /-- Mirrors `allIds`. -/
 def allIdsF (db : Std.HashMap Nat FConstr) : Std.HashSet Nat :=
@@ -588,13 +592,13 @@ def redGoalOfF (subst : List (Nat × Sat.PB.SubstVal)) (C : Constr)
     | none => none
 
 /-- Mirrors the database-goal part of `checkRedundance`
-(`goalDb.toList.all (dbGoalCovered ...)`): constraints whose touched literals
-are all set true are skipped on the array form; the rest are converted, and
-the normalized database for the "already in the database" test is built
-only when needed. -/
+(`goalDb.toList.all (dbGoalCovered ... lookupDb ...)`): constraints whose
+touched literals are all set true are skipped on the array form; the rest
+are converted, and the normalized `lookupDb` for the "already in the
+database" test is built only when needed. -/
 def dbGoalsCoveredF (subst : List (Nat × Sat.PB.SubstVal)) (nC : Constr)
-    (goalDb : Std.HashMap Nat FConstr) (proved : List (String × Constr)) :
-    Bool := Id.run do
+    (goalDb lookupDb : Std.HashMap Nat FConstr)
+    (proved : List (String × Constr)) : Bool := Id.run do
   -- first binding wins, as `lookupSubst`
   let substMap : Std.HashMap Nat Sat.PB.SubstVal :=
     subst.foldl (fun m (v, sv) => if m.contains v then m else m.insert v sv) {}
@@ -612,7 +616,7 @@ def dbGoalsCoveredF (subst : List (Nat × Sat.PB.SubstVal)) (nC : Constr)
         break
     if !allTrue then remaining := remaining.push c
   if remaining.isEmpty then return true
-  let normDb : List Constr := goalDb.toList.map fun (_, c) =>
+  let normDb : List Constr := lookupDb.toList.map fun (_, c) =>
     fromFConstr (normalizeFConstr c)
   for c in remaining do
     let D := fromFConstr c
@@ -663,14 +667,14 @@ def processFRedItems
 /-- Mirrors `checkRedundance`. -/
 def checkFRedundance
     (execFn : FBoolCheckState → List VeriPB.ProofStep → Option FBoolCheckState)
-    (st0 : FBoolCheckState) (goalDb : Std.HashMap Nat FConstr)
+    (st0 : FBoolCheckState) (goalDb lookupDb : Std.HashMap Nat FConstr)
     (subst : List (Nat × Sat.PB.SubstVal)) (C : Constr)
     (items : List VeriPB.ProofStep) (qedHint : Option Nat) : Option Nat :=
   let nC := rupNegate C
   let st1 := { st0 with
     db := st0.db.insert st0.nextId (rupNegateF (toFConstr C))
     nextId := st0.nextId + 1 }
-  match processFRedItems execFn (redGoalOfF subst C st0.curObj goalDb) st1
+  match processFRedItems execFn (redGoalOfF subst C st0.curObj lookupDb) st1
       items [] with
   | none => none
   | some (fin, proved) =>
@@ -680,8 +684,154 @@ def checkFRedundance
         | none => false
       | none =>
         hashGoalsCovered subst C nC st0.curObj proved &&
-        dbGoalsCoveredF subst nC goalDb proved
+        dbGoalsCoveredF subst nC goalDb lookupDb proved
     if ok then some fin.nextId else none
+
+/-- Mirrors `insertAll`. -/
+def insertAllF : Std.HashMap Nat FConstr → Nat → List Constr → Std.HashMap Nat FConstr
+  | db, _, [] => db
+  | db, i, c :: cs => insertAllF (db.insert i (toFConstr c)) (i + 1) cs
+
+/-- Mirrors `processGoalItems`. -/
+def processFGoalItems
+    (execFn : FBoolCheckState → List VeriPB.ProofStep → Option FBoolCheckState)
+    (goalOf : String → Option Constr) (strictId : String → Bool)
+    (strictPrem : List Constr) (cur : Option VeriPB.ScopeKind) :
+    FBoolCheckState → List VeriPB.ProofStep →
+      List (String × Constr × Option VeriPB.ScopeKind) → List (Option VeriPB.ScopeKind) →
+      Option (FBoolCheckState × List (String × Constr × Option VeriPB.ScopeKind) ×
+        List (Option VeriPB.ScopeKind))
+  | st, [], proved, contras => some (st, proved, contras)
+  | st, item :: rest, proved, contras =>
+    match item with
+    | .proofgoal gid steps (some h) =>
+      if steps.any innerStepForbidden then none else
+      if strictId gid then
+        match execFn { st with
+            db := insertAllF st.db st.nextId strictPrem
+            nextId := st.nextId + strictPrem.length } steps.toList with
+        | none => none
+        | some fin =>
+          match fin.db[h]? with
+          | some c =>
+            if c.isContra then
+              processFGoalItems execFn goalOf strictId strictPrem cur
+                { st with nextId := fin.nextId } rest proved (cur :: contras)
+            else none
+          | none => none
+      else
+      match goalOf gid with
+      | none => none
+      | some G =>
+        match execFn { st with
+            db := st.db.insert st.nextId (toFConstr (negTriv G))
+            nextId := st.nextId + 1 } steps.toList with
+        | none => none
+        | some fin =>
+          match fin.db[h]? with
+          | some c =>
+            if c.isContra then
+              processFGoalItems execFn goalOf strictId strictPrem cur
+                { st with nextId := fin.nextId } rest ((gid, G, cur) :: proved) contras
+            else none
+          | none => none
+    | _ =>
+      if isLStep item then
+        match execFn st [item] with
+        | some st' => processFGoalItems execFn goalOf strictId strictPrem cur st' rest
+            proved contras
+        | none => none
+      else none
+
+/-- Mirrors `processScopedItems`. -/
+def processFScopedItems
+    (execFn : FBoolCheckState → List VeriPB.ProofStep → Option FBoolCheckState)
+    (goalOf : String → Option Constr) (strictId : String → Bool)
+    (strictPrem : List Constr) (scopePrem : VeriPB.ScopeKind → Option (List Constr)) :
+    FBoolCheckState → List VeriPB.ProofStep →
+      List (String × Constr × Option VeriPB.ScopeKind) → List (Option VeriPB.ScopeKind) →
+      Option (FBoolCheckState × List (String × Constr × Option VeriPB.ScopeKind) ×
+        List (Option VeriPB.ScopeKind))
+  | st, [], proved, contras => some (st, proved, contras)
+  | st, item :: rest, proved, contras =>
+    match item with
+    | .scope kind items =>
+      match scopePrem kind with
+      | none => none
+      | some prem =>
+        match processFGoalItems execFn goalOf strictId strictPrem (some kind)
+            { st with
+              db := insertAllF st.db st.nextId prem
+              nextId := st.nextId + prem.length } items.toList proved contras with
+        | none => none
+        | some (fin, proved', contras') =>
+          processFScopedItems execFn goalOf strictId strictPrem scopePrem
+            { st with nextId := fin.nextId } rest proved' contras'
+    | _ =>
+      match processFGoalItems execFn goalOf strictId strictPrem none st [item]
+          proved contras with
+      | none => none
+      | some (st', proved', contras') =>
+        processFScopedItems execFn goalOf strictId strictPrem scopePrem st' rest
+          proved' contras'
+
+/-- Mirrors `domFresh`: the database part runs over the literal codes
+(variable = code / 2) against a hash set of the aux variables. -/
+def domFreshF (A : List Nat) (db : Std.HashMap Nat FConstr) (nc : Constr)
+    (obj : Objective) (subst : List (Nat × Sat.PB.SubstVal)) : Bool := Id.run do
+  -- equal to `domFresh`: with no aux variable every check is vacuous
+  if A.isEmpty then return true
+  let auxSet : Std.HashSet Nat := A.foldl (fun s x => s.insert x) {}
+  for (_, c) in db.toList do
+    for l in c.lits do
+      if auxSet.contains (l / 2) then return false
+  return termsAuxFree A nc.terms && termsAuxFree A obj && substAuxFree A subst
+
+/-- Mirrors `checkRedOrder`. -/
+def checkFRedOrder
+    (execFn : FBoolCheckState → List VeriPB.ProofStep → Option FBoolCheckState)
+    (st0 : FBoolCheckState) (O : Sat.PB.Dominance.OrderData) (z : List Sat.PB.Literal)
+    (goalDb lookupDb freshDb : Std.HashMap Nat FConstr)
+    (subst : List (Nat × Sat.PB.SubstVal)) (C : Constr)
+    (items : List VeriPB.ProofStep) (qedHint : Option Nat) : Option Nat :=
+  if qedHint.isNone && (hasScope items || !untouchedOrder z subst) &&
+      !domFreshF O.aux freshDb (VeriPB.normalizeConstr C) st0.curObj subst then none
+  else
+  let nC := rupNegate C
+  let st1 := { st0 with
+    db := st0.db.insert st0.nextId (rupNegateF (toFConstr C))
+    nextId := st0.nextId + 1 }
+  let sp : VeriPB.ScopeKind → Option (List Constr) :=
+    if hasScope items then redScopePrem O z subst else fun _ => none
+  match processFScopedItems execFn
+      (redOrdGoalOf O z subst C st0.curObj fun n => (lookupDb[n]?).map fromFConstr)
+      (fun _ => false) [] sp st1 items [] [] with
+  | none => none
+  | some (fin, proved, _) =>
+    let ok := match qedHint with
+      | some cid => match fin.db[cid]? with
+        | some c => c.isContra
+        | none => false
+      | none =>
+        domHashCovered nC proved "#1" (substGoal subst C) &&
+          (untouchedOrder z subst ||
+            domOrderGoalsCovered nC proved 2
+              (O.defs.map (substGoal (Sat.PB.Dominance.sigmaLeq O z subst)))) &&
+          domObjCovered subst nC st0.curObj proved ("#" ++ toString (O.defs.length + 2)) &&
+          dbGoalsCoveredF subst nC goalDb lookupDb (leqProved proved)
+    if ok then some fin.nextId else none
+
+/-- Mirrors `checkRedAny`. -/
+def checkFRedAny
+    (execFn : FBoolCheckState → List VeriPB.ProofStep → Option FBoolCheckState)
+    (st0 : FBoolCheckState) (ord : Option (Sat.PB.Dominance.OrderData × List Sat.PB.Literal))
+    (goalDb lookupDb freshDb : Std.HashMap Nat FConstr)
+    (subst : List (Nat × Sat.PB.SubstVal)) (C : Constr)
+    (items : List VeriPB.ProofStep) (qedHint : Option Nat) : Option Nat :=
+  match ord with
+  | none => checkFRedundance execFn st0 goalDb lookupDb subst C items qedHint
+  | some (O, z) =>
+    checkFRedOrder execFn st0 O z goalDb lookupDb freshDb subst C items qedHint
 
 /-- Mirrors `redStep`. -/
 def redFStep
@@ -695,7 +845,10 @@ def redFStep
     match VeriPB.parseSubstPairs substPairs state.numVars with
     | .error _ => none
     | .ok subst =>
-      match checkFRedundance execFn state state.db subst C items qedHint with
+      let goalDb := if state.s2c then
+        state.db.filter fun id _ => state.coreIds.contains id else state.db
+      match checkFRedAny execFn state state.ord goalDb state.db state.db subst C items
+          qedHint with
       | none => none
       | some fid =>
         some { state with
@@ -747,14 +900,206 @@ def delcCheckedFStep
           let rest := state.db.erase did
           let core' := state.coreIds.erase did
           let coreDb := rest.filter fun id _ => core'.contains id
-          match checkFRedundance execFn
-              { state with db := coreDb, coreIds := core', coreOnly := true }
-              coreDb subst
+          match checkFRedAny execFn
+              { state with db := coreDb, coreIds := core', coreOnly := true } state.ord
+              coreDb coreDb rest subst
               (fromFConstr D) items.toList qedHint with
           | none => none
           | some fid =>
             some { state with db := rest, coreIds := core', nextId := fid }
   | _, _ => none
+
+/-- Mirrors the core-goal part of `checkDominance`
+(`goalDb.toList.all (dbGoalCoveredDom ...)`), as `dbGoalsCoveredF`. -/
+def dbGoalsCoveredDomF (subst : List (Nat × Sat.PB.SubstVal)) (nC : Constr)
+    (goalDb lookupDb : Std.HashMap Nat FConstr)
+    (proved : List (String × Constr × Option VeriPB.ScopeKind)) : Bool := Id.run do
+  -- first binding wins, as `lookupSubst`
+  let substMap : Std.HashMap Nat Sat.PB.SubstVal :=
+    subst.foldl (fun m (v, sv) => if m.contains v then m else m.insert v sv) {}
+  let mut remaining : Array FConstr := #[]
+  for (_, c) in goalDb.toList do
+    let mut allTrue := true
+    for l in c.lits do
+      let ok := match substMap[l / 2]? with
+        | none => true
+        | some .one => l % 2 == 0
+        | some .zero => l % 2 == 1
+        | some _ => false
+      if !ok then
+        allTrue := false
+        break
+    if !allTrue then remaining := remaining.push c
+  if remaining.isEmpty then return true
+  let normDb : List Constr := lookupDb.toList.map fun (_, c) =>
+    fromFConstr (normalizeFConstr c)
+  for c in remaining do
+    let D := fromFConstr c
+    let G := substGoal subst D
+    let ok := trivialByPair G ||
+      impliesSyntactic (VeriPB.normalizeConstr D) G ||
+       impliesSyntactic nC G ||
+      proved.any (fun p => provLeqOk p.2.2 && idInDb goalDb p.1 &&
+        constrMatchNorm G p.2.1) ||
+      (let nG := VeriPB.normalizeConstr G
+       normDb.any fun d => constrMatchNorm nG d)
+    if !ok then return false
+  return true
+
+/-- Mirrors `checkDominance`. -/
+def checkFDominance
+    (execFn : FBoolCheckState → List VeriPB.ProofStep → Option FBoolCheckState)
+    (st0 : FBoolCheckState) (O : Sat.PB.Dominance.OrderData) (z : List Sat.PB.Literal)
+    (subst : List (Nat × Sat.PB.SubstVal)) (C : Constr)
+    (items : List VeriPB.ProofStep) (qedHint : Option Nat) : Option Nat :=
+  let nC := rupNegate C
+  let st1 := { st0 with
+    db := st0.db.insert st0.nextId (rupNegateF (toFConstr C))
+    nextId := st0.nextId + 1 }
+  let k := O.defs.length
+  match processFScopedItems execFn (domGoalOf O z subst st0.curObj fun n => (st0.db[n]?).map fromFConstr)
+      (domStrictId k) (O.defs.map (substGoal (Sat.PB.Dominance.sigmaGeq O z subst)))
+      (domScopePrem O z subst) st1 items [] [] with
+  | none => none
+  | some (fin, proved, contras) =>
+    let ok := match qedHint with
+      | some cid => match fin.db[cid]? with
+        | some c => c.isContra
+        | none => false
+      | none =>
+        domOrderGoalsCovered nC proved 1
+            (O.defs.map (substGoal (Sat.PB.Dominance.sigmaLeq O z subst))) &&
+          contras.any provGeqOk &&
+          domObjCovered subst nC st0.curObj proved ("#" ++ toString (k + 2)) &&
+          dbGoalsCoveredDomF subst nC
+            (st0.db.filter fun id _ => st0.coreIds.contains id) st0.db proved
+    if ok then some fin.nextId else none
+
+/-- Mirrors `domStep`. -/
+def domFStep
+    (execFn : FBoolCheckState → List VeriPB.ProofStep → Option FBoolCheckState)
+    (state : FBoolCheckState) (constr : VeriPB.OPBConstr)
+    (substPairs : List (String × String)) (items : List VeriPB.ProofStep)
+    (qedHint : Option Nat) : Option FBoolCheckState :=
+  match state.ord with
+  | none => none
+  | some (O, z) =>
+    match VeriPB.opbConstrToPB constr with
+    | .error _ => none
+    | .ok C =>
+      match VeriPB.parseSubstPairs substPairs state.numVars with
+      | .error _ => none
+      | .ok subst =>
+        if !domFreshF O.aux state.db (VeriPB.normalizeConstr C) state.curObj subst then
+          none
+        else
+        match checkFDominance execFn state O z subst C items qedHint with
+        | none => none
+        | some fid =>
+          some { state with
+            db := state.db.insert fid (normalizeFConstr (toFConstr C))
+            nextId := fid + 1
+            coreIds := if state.s2c then state.coreIds.insert fid else state.coreIds }
+
+/-- Mirrors `mkDBRec`. -/
+def mkFDBRec : List Constr → Nat → Std.HashMap Nat FConstr
+  | [], _ => {}
+  | c :: rest, i => (mkFDBRec rest (i + 1)).insert i (toFConstr c)
+
+/-- Mirrors `BoolCheckState.withLocalDb`. -/
+def FBoolCheckState.withLocalDb (state : FBoolCheckState)
+    (db : Std.HashMap Nat FConstr) (nextId : Nat) : FBoolCheckState :=
+  { state with
+    db := db
+    nextId := nextId
+    coreIds := {}
+    coreOnly := false
+    curObj := []
+    curOffset := 0
+    ord := none
+    s2c := false }
+
+/-- Mirrors `checkSpecChain`. -/
+def checkSpecChainF
+    (execFn : FBoolCheckState → List VeriPB.ProofStep → Option FBoolCheckState)
+    (aux : List Nat) :
+    FBoolCheckState → List VeriPB.ProofStep →
+      Option (List (Constr × List (Nat × Sat.PB.SubstVal)))
+  | _, [] => some []
+  | st, item :: rest =>
+    match specRedOf item with
+    | none => none
+    | some (constr, pairs, items, qedHint) =>
+      match VeriPB.opbConstrToPB constr with
+      | .error _ => none
+      | .ok C =>
+        match VeriPB.parseSubstPairs pairs st.numVars with
+        | .error _ => none
+        | .ok subst =>
+          if !(subst.all fun p => decide (p.1 ∈ aux)) then none
+          else match checkFRedundance execFn st st.db st.db subst C items qedHint with
+            | none => none
+            | some fid =>
+              match checkSpecChainF execFn aux
+                  { st with db := st.db.insert fid (normalizeFConstr (toFConstr C))
+                            nextId := fid + 1 } rest with
+              | none => none
+              | some steps => some ((VeriPB.normalizeConstr C, subst) :: steps)
+
+/-- Mirrors `checkOrderProof`. -/
+def checkOrderProofF
+    (execFn : FBoolCheckState → List VeriPB.ProofStep → Option FBoolCheckState)
+    (state : FBoolCheckState) (start : Nat) (prem goals : List Constr)
+    (items : List VeriPB.ProofStep) : Option Nat :=
+  match processFRedItems execFn (hashGoalOf goals)
+      (state.withLocalDb (mkFDBRec prem start) (start + prem.length)) items [] with
+  | none => none
+  | some (fin, proved) =>
+    if hashGoalsAllCovered proved 1 goals then some fin.nextId else none
+
+/-- Mirrors `defOrderStep`. -/
+def defOrderFStep
+    (execFn : FBoolCheckState → List VeriPB.ProofStep → Option FBoolCheckState)
+    (state : FBoolCheckState) (od : VeriPB.OrderDef VeriPB.ProofStep) :
+    Option FBoolCheckState :=
+  match od.transitivity, od.reflexivity with
+  | some t, some refl =>
+    match od.defConstrs.mapM VeriPB.opbConstrToPB with
+    | .error _ => none
+    | .ok defs0 =>
+      match checkSpecChainF execFn od.aux (state.withLocalDb {} 1)
+          (od.spec.getD #[]).toList with
+      | none => none
+      | some steps =>
+        let O : Sat.PB.Dominance.OrderData :=
+          { left := od.left, right := od.right, aux := od.aux,
+            spec := steps.map Prod.fst, defs := defs0.map VeriPB.normalizeConstr }
+        if !orderWellFormed O ||
+            !transFresh O t.freshRight t.freshAux1 t.freshAux2 then none
+        else
+          match checkOrderProofF execFn state 1
+              (transPremises O t.freshRight t.freshAux1 t.freshAux2)
+              (transGoals O t.freshRight t.freshAux2) t.proof.toList with
+          | none => none
+          | some tid =>
+            match checkOrderProofF execFn state tid (reflPremises O) (reflGoals O)
+                refl.toList with
+            | none => none
+            | some _ => some { state with orders := (od.name, O) :: state.orders }
+  | _, _ => none
+
+/-- Mirrors `loadOrderStep`. -/
+def loadOrderFStep (state : FBoolCheckState) (name : String)
+    (lits : List VeriPB.OPBLit) : Option FBoolCheckState :=
+  match findOrder name state.orders with
+  | none => none
+  | some O =>
+    match lits.mapM VeriPB.opbLitToPB with
+    | .error _ => none
+    | .ok z =>
+      if loadOrderOk O z then
+        some { state with coreIds := allIdsF state.db, ord := some (O, z) }
+      else none
 
 def execFStepsFuel (fuel : Nat) (state : FBoolCheckState)
     (steps : List VeriPB.ProofStep) : Option FBoolCheckState :=
@@ -833,9 +1178,18 @@ def execFStepsFuel (fuel : Nat) (state : FBoolCheckState)
         | 0 => none
         | n + 1 =>
           redFStep (execFStepsFuel n) state constr substPairs (goalsToItems goals) none
+      | .dom constr substPairs goals =>
+        match fuel with
+        | 0 => none
+        | n + 1 =>
+          domFStep (execFStepsFuel n) state constr substPairs (goalsToItems goals) none
       | .strengthening rule constr substPairs items qedHint =>
         match rule with
-        | .dom => none
+        | .dom =>
+          match fuel with
+          | 0 => none
+          | n + 1 =>
+            domFStep (execFStepsFuel n) state constr substPairs items.toList qedHint
         | .red =>
           match fuel with
           | 0 => none
@@ -852,7 +1206,7 @@ def execFStepsFuel (fuel : Nat) (state : FBoolCheckState)
           db := ids.foldl (fun db id => db.erase id) state.db
           coreIds := ids.foldl (fun s id => s.erase id) state.coreIds }
       | .delc ids =>
-        if state.s2c && !allCoreF state then none
+        if (state.ord.isSome || state.s2c) && !allCoreF state then none
         else some { state with
           db := ids.foldl (fun db id => db.erase id) state.db
           coreIds := ids.foldl (fun s id => s.erase id) state.coreIds
@@ -868,9 +1222,13 @@ def execFStepsFuel (fuel : Nat) (state : FBoolCheckState)
       | .strengtheningToCore on =>
         if on then some { state with coreIds := allIdsF state.db, s2c := true }
         else some { state with s2c := false }
-      | .loadOrder (some _) _ => none
-      | .loadOrder none _ => some state
-      | .defOrder _ => some state
+      | .loadOrder (some name) lits => loadOrderFStep state name lits
+      | .loadOrder none _ =>
+        if state.ord.isSome then some { state with ord := none } else none
+      | .defOrder od =>
+        match fuel with
+        | 0 => none
+        | n + 1 => defOrderFStep (execFStepsFuel n) state od
       | .conclusionNone => some state
       | .output => some state
       | .conclusion id =>
