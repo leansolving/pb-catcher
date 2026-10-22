@@ -1,0 +1,10 @@
+pseudo-Boolean proof version 3.0
+f 2 ;
+red 1 ~x4 1 x2 >= 1 : x4 -> 0 : subproof
+qed ;
+strengthening_to_core on ;
+red 1 x4 >= 1 : x4 -> 1 : subproof
+qed ;
+output NONE ;
+conclusion NONE ;
+end pseudo-Boolean proof ;

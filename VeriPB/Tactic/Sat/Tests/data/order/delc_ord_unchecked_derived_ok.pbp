@@ -1,0 +1,35 @@
+pseudo-Boolean proof version 3.0
+f 1;
+def_order lex2
+	vars
+		left u1 u2;
+		right v1 v2;
+		aux;
+	end;
+	def
+		2 ~u1 1 ~u2 2 v1 1 v2 >= 3;
+	end;
+	transitivity
+	vars
+		fresh_right w1 w2;
+	end;
+	proof
+	proofgoal #1
+pol 1 2 + 3 +;
+	qed : 4;
+qed;
+	end;
+	reflexivity
+		proof
+			proofgoal #1
+			qed : 5;
+		qed;
+	end;
+end;
+load_order lex2 x1 x2;
+rup 1 x1 1 x2 1 ~x3 >= 1 : ~ 1;
+deld 2;
+delc 1;
+output NONE ;
+conclusion NONE;
+end pseudo-Boolean proof;

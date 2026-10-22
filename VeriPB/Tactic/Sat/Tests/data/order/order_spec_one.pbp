@@ -1,0 +1,35 @@
+pseudo-Boolean proof version 3.0
+f 2;
+def_order bad2
+	vars
+		left p1;
+		right q1;
+		aux $a1;
+	end;
+	spec
+red 1 ~$a1 >= 1 : $a1 -> 0 : subproof
+qed;
+	end;
+	def
+		1 ~p1 1 q1 >= 1;
+	end;
+	transitivity
+	vars
+		fresh_right r1;
+		fresh_aux_1 $b1;
+		fresh_aux_2 $c1;
+	end;
+	proof
+	proofgoal #1
+pol 4 5 + 6 +;
+	qed : 7;
+qed;
+	end;
+	reflexivity
+		proof
+		qed;
+	end;
+end;
+output NONE;
+conclusion NONE;
+end pseudo-Boolean proof;

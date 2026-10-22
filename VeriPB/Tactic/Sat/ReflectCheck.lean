@@ -7,6 +7,7 @@ import Lean
 import Std
 import VeriPB.Tactic.Sat.PseudoBoolean
 import VeriPB.Tactic.Sat.FromVeriPB
+import VeriPB.Tactic.Sat.Dominance
 
 /-!
 # Verified VeriPB checker definitions
@@ -101,12 +102,25 @@ structure BoolCheckState where
   numVars : Nat
   /-- Expected formula size -/
   formulaSize : Nat
-  /-- Ids of the core constraints (VeriPB's core set). Bookkeeping only:
-  no soundness proof uses it. It decides the `deld`/`delc` preconditions and
-  which constraints a checked deletion sees (goals, hints). -/
+  /-- Ids of the core constraints (VeriPB's core set). It decides the
+  `deld`/`delc` preconditions, which constraints a checked deletion and
+  `obju` see (goals, hints), and, under `strengthening_to_core`, which
+  constraints get `red` database goals. Soundness-relevant through the
+  invariant clauses `CoreImplied` (while `s2c` is on, the core implies every
+  database constraint) and `OrdInv` (while an order is loaded, every core
+  model has a database model below it in the order). -/
   coreIds : Std.HashSet Nat := {}
-  /-- `strengthening_to_core` mode: new `red` results go to the core. -/
+  /-- `strengthening_to_core` mode: new `red` results go to the core and
+  `red` database goals range over the core only. -/
   s2c : Bool := false
+  /-- The orders defined by `def_order`, newest first (a lookup finds the
+  last definition of a name, as VeriPB and CakePB). Each one passed its
+  spec, transitivity and reflexivity checks (invariant clause
+  `StoredGood`). -/
+  orders : List (String × Sat.PB.Dominance.OrderData) := []
+  /-- The loaded order with its literals, by value (a later `def_order` of
+  the same name does not change it); `none` when no order is loaded. -/
+  ord : Option (Sat.PB.Dominance.OrderData × List Sat.PB.Literal) := none
   deriving Inhabited
 
 /-- Build HashMap from list with starting index (pure recursive). -/
@@ -132,7 +146,9 @@ def BoolCheckState.fromConstrs (constrs : Array Constr) (numVars : Nat)
     numVars := numVars
     formulaSize := constrs.size
     coreIds := (List.range constrs.size).foldl (fun s i => s.insert (i + 1)) {}
-    s2c := false }
+    s2c := false
+    orders := []
+    ord := none }
 
 /-- The set of all ids of a database (`strengthening_to_core on`). -/
 def allIds (db : Std.HashMap Nat Constr) : Std.HashSet Nat :=
@@ -475,7 +491,8 @@ def objGoalConstr (subst : List (Nat × Sat.PB.SubstVal)) (obj : Objective) : Co
 /-- Goal constraint of a `proofgoal` id: `#1` is `C|ω`, `#2` the objective
 goal (only with an objective), a number `n` is `D|ω` for the constraint `n`
 of `goalDb` (the database before the step; core only for checked
-deletion). Other ids are invalid. -/
+deletion and, under `strengthening_to_core`, for `red`). Other ids are
+invalid. -/
 def redGoalOf (subst : List (Nat × Sat.PB.SubstVal)) (C : Constr)
     (obj : Objective) (goalDb : Std.HashMap Nat Constr) (gid : String) :
     Option Constr :=
@@ -512,9 +529,10 @@ def hashGoalsCovered (subst : List (Nat × Sat.PB.SubstVal)) (C nC : Constr)
 `¬C` implies
 `D|ω`, or `D|ω` equals a database goal proved by a `proofgoal` (its own
 goal included: CakePB checks that one by id, the constraints are identical)
-or a constraint of `goalDb`. -/
+or a constraint of `lookupDb` (the database before the step: all of it for
+`red`, the core for checked deletion). -/
 def dbGoalCovered (subst : List (Nat × Sat.PB.SubstVal)) (nC : Constr)
-    (goalDb : Std.HashMap Nat Constr) (proved : List (String × Constr))
+    (lookupDb : Std.HashMap Nat Constr) (proved : List (String × Constr))
     (D : Constr) : Bool :=
   touchedSatisfied subst D.terms ||
     (let G := substGoal subst D
@@ -522,7 +540,7 @@ def dbGoalCovered (subst : List (Nat × Sat.PB.SubstVal)) (nC : Constr)
      impliesSyntactic (VeriPB.normalizeConstr D) G ||
      impliesSyntactic nC G ||
      proved.any (fun p => !p.1.startsWith "#" && constrMatchNorm G p.2) ||
-     constrInDB G goalDb)
+     constrInDB G lookupDb)
 
 /-- Steps allowed inside subproofs (`pbc`, `proofgoal`, the top level of a
 `red` or checked-deletion subproof): CakePB's `lstep`s. All of them derive
@@ -903,9 +921,297 @@ def conclusionClaim (getC : Nat → Option Constr) (F : Array Constr)
     else none
   | _ => none
 
+/-! ### Orders (`def_order`, `load_order`)
+
+Semantics: design.md §5 (testcampaign/p3), CakePB `StoreOrder`/`LoadOrder`
+(npbc_checkScript.sml `check_spec`, `check_good_aord`, `check_transitivity`,
+`check_reflexivity`, `guard_ord_t`). The order variables are global variable
+indices; the checks run on local databases and allocate no global id. -/
+
+/-- The `red` step of a spec block (either constructor): constraint, witness,
+subproof items and closing hint. Every other statement is rejected
+(CakePB `parse_spec_aux`). -/
+def specRedOf : VeriPB.ProofStep →
+    Option (VeriPB.OPBConstr × List (String × String) × List VeriPB.ProofStep ×
+      Option Nat)
+  | .red constr subst goals => some (constr, subst, goalsToItems goals, none)
+  | .strengthening .red constr subst items qedHint =>
+    some (constr, subst, items.toList, qedHint)
+  | _ => none
+
+/-- Well-formedness of an order encoding (CakePB `check_good_aord`):
+`|left| = |right|`, the left, right and aux variables are pairwise distinct,
+and every spec and def constraint ranges over them. -/
+def orderWellFormed (O : Sat.PB.Dominance.OrderData) : Bool :=
+  O.left.length == O.right.length &&
+  decide (O.left ++ O.right ++ O.aux).Nodup &&
+  (O.spec ++ O.defs).all fun c =>
+    (Sat.PB.Dominance.varsOf c).all fun x => decide (x ∈ O.left ++ O.right ++ O.aux)
+
+/-- The fresh lists of a transitivity proof (CakePB `check_ws`): `|w| = |left|`,
+`|b| = |c| = |aux|`, and `left ++ right ++ aux ++ w ++ b ++ c` pairwise
+distinct. -/
+def transFresh (O : Sat.PB.Dominance.OrderData) (w b c : List Nat) : Bool :=
+  w.length == O.left.length && b.length == O.aux.length &&
+  c.length == O.aux.length &&
+  decide (O.left ++ O.right ++ O.aux ++ w ++ b ++ c).Nodup
+
+/-- Premises of the transitivity proof, ids `1..3s+2k` (CakePB `trans_subst`):
+`Spec(u,v,a)`, `Spec(v,w,b)`, `Spec(u,w,c)`, `Def(u,v,a)`, `Def(v,w,b)`,
+the substituted constraints normalized. -/
+def transPremises (O : Sat.PB.Dominance.OrderData) (w b c : List Nat) :
+    List Constr :=
+  O.spec ++ O.spec.map (substGoal (Sat.PB.Dominance.sigmaVWB O w b)) ++
+    O.spec.map (substGoal (Sat.PB.Dominance.sigmaUWC O w c)) ++
+    O.defs ++ O.defs.map (substGoal (Sat.PB.Dominance.sigmaVWB O w b))
+
+/-- Goals `#1..#k` of the transitivity proof: `Def(u,w,c)`. -/
+def transGoals (O : Sat.PB.Dominance.OrderData) (w c : List Nat) : List Constr :=
+  O.defs.map (substGoal (Sat.PB.Dominance.sigmaUWC O w c))
+
+/-- Premises of the reflexivity proof: `Spec[v:=u]` (CakePB `refl_subst`). -/
+def reflPremises (O : Sat.PB.Dominance.OrderData) : List Constr :=
+  O.spec.map (substGoal (Sat.PB.Dominance.sigmaRefl O))
+
+/-- Goals `#1..#k` of the reflexivity proof: `Def[v:=u]`. -/
+def reflGoals (O : Sat.PB.Dominance.OrderData) : List Constr :=
+  O.defs.map (substGoal (Sat.PB.Dominance.sigmaRefl O))
+
+/-- Goal of a `proofgoal #j` in an order proof: the `j`-th goal (1-based);
+numbered ids and `#0` are invalid (CakePB `extract_clauses` on an empty
+formula). -/
+def hashGoalOf (goals : List Constr) (gid : String) : Option Constr :=
+  if gid.startsWith "#" then
+    match (gid.drop 1).toString.toNat? with
+    | some (j + 1) => goals[j]?
+    | _ => none
+  else none
+
+/-- Every goal `#j, #j+1, ...` of an order proof is covered: trivial or proved
+by its `proofgoal` (CakePB `check_hash_goals ([],1) [] r dsubs`, whose
+implication from the trivial constraint holds only for trivial goals). -/
+def hashGoalsAllCovered (proved : List (String × Constr)) :
+    Nat → List Constr → Bool
+  | _, [] => true
+  | j, G :: gs => objuGoalCovered ("#" ++ toString j) G proved &&
+      hashGoalsAllCovered proved (j + 1) gs
+
+/-- The literals of a `load_order` (CakePB `guard_ord_t`): one per left
+variable, none over an aux variable. -/
+def loadOrderOk (O : Sat.PB.Dominance.OrderData) (z : List Sat.PB.Literal) : Bool :=
+  z.length == O.left.length && z.all fun l => decide (l.var ∉ O.aux)
+
+/-- The last definition of an order name. -/
+def findOrder (name : String) :
+    List (String × Sat.PB.Dominance.OrderData) → Option Sat.PB.Dominance.OrderData
+  | [] => none
+  | (n, O) :: rest => if n == name then some O else findOrder name rest
+
+/-- A local database for the checks of a `def_order`: the given constraints
+and id counter, no core, no objective, not in a core-only subproof and not
+under `strengthening_to_core` (CakePB checks spec, transitivity and
+reflexivity on fresh formulas without objective). -/
+def BoolCheckState.withLocalDb (state : BoolCheckState) (db : Std.HashMap Nat Constr)
+    (nextId : Nat) : BoolCheckState :=
+  { state with
+    db := db
+    nextId := nextId
+    coreIds := {}
+    coreOnly := false
+    curObj := []
+    curOffset := 0
+    ord := none
+    s2c := false }
+
+/-! ### Dominance (`dom`)
+
+The goals of `dom C : ω` with the order `(O, z)` loaded (design §5, CakePB
+`dom_subgoals`), `k = |O.defs|`: `#1..#k` the order goals `Def_j[σ≤]`, `#k+1`
+the strict goal (premises `Def[σ≥]`, the block derives a contradiction),
+`#k+2` the objective goal `f|ω ≤ f` (only with an objective), and a goal
+`Dᵢ|ω` for every CORE constraint. A goal proved inside `scope leq` (premises
+`Spec[σ≤]`) or `scope geq` (premises `Spec[σ≥]`) carries that provenance:
+`leq`-restricted goals count only when proved outside any scope or in
+`scope leq`, the strict goal only outside any scope or in `scope geq`. -/
+
+/-- Provenance compatible with a `leq`-restricted goal (order, objective and
+core goals): proved outside any scope or in `scope leq`. -/
+def provLeqOk : Option VeriPB.ScopeKind → Bool
+  | none => true
+  | some .leq => true
+  | some .geq => false
+
+/-- Provenance compatible with the strict goal: proved outside any scope or in
+`scope geq` (CakePB `find_scope_1`). -/
+def provGeqOk : Option VeriPB.ScopeKind → Bool
+  | none => true
+  | some .geq => true
+  | some .leq => false
+
+/-- The number of a goal id `#j`. -/
+def hashNum? (gid : String) : Option Nat :=
+  if gid.startsWith "#" then (gid.drop 1).toString.toNat? else none
+
+/-- Insert constraints at consecutive ids `i, i+1, ...` (premises of a
+multi-premise goal or a scope, CakePB `list_insert_fml`). -/
+def insertAll : Std.HashMap Nat Constr → Nat → List Constr → Std.HashMap Nat Constr
+  | db, _, [] => db
+  | db, i, c :: cs => insertAll (db.insert i c) (i + 1) cs
+
+/-- No term is over a variable of `A`. -/
+def termsAuxFree (A : List Nat) (ts : List Sat.PB.Term) : Bool :=
+  ts.all fun t => decide (t.2.var ∉ A)
+
+/-- No substitution entry maps to a literal over a variable of `A`. -/
+def substAuxFree (A : List Nat) (subst : List (Nat × Sat.PB.SubstVal)) : Bool :=
+  subst.all fun p => (Sat.PB.Dominance.svVars p.2).all fun j => decide (j ∉ A)
+
+/-- Freshness of the aux variables `A` of the loaded order at a `dom` step
+(CakePB `check_fresh_aspo`, design T-D2): no aux variable in any database
+constraint (F1), in the new constraint `nc` (normalized, F2), in the current
+objective (F3), or in the image of the witness (F4). -/
+def domFresh (A : List Nat) (db : Std.HashMap Nat Constr) (nc : Constr)
+    (obj : Objective) (subst : List (Nat × Sat.PB.SubstVal)) : Bool :=
+  db.toList.all (fun p => termsAuxFree A p.2.terms) && termsAuxFree A nc.terms &&
+    termsAuxFree A obj && substAuxFree A subst
+
+/-- Goal constraint of a `proofgoal` id in a `dom` subproof, except the strict
+goal `#k+1`: `#j` (`1 ≤ j ≤ k`) the order goal `Def_j[σ≤]`, `#k+2` the
+objective goal (only with an objective), a number `n` the goal `D|ω` of the
+constraint `lookup n` (the database before the step, all of it). -/
+def domGoalOf (O : Sat.PB.Dominance.OrderData) (z : List Sat.PB.Literal)
+    (subst : List (Nat × Sat.PB.SubstVal)) (obj : Objective)
+    (lookup : Nat → Option Constr) (gid : String) : Option Constr :=
+  if gid.startsWith "#" then
+    match hashNum? gid with
+    | some (j + 1) =>
+      if j < O.defs.length then
+        (O.defs[j]?).map (substGoal (Sat.PB.Dominance.sigmaLeq O z subst))
+      else if j == O.defs.length + 1 && !obj.isEmpty then
+        some (objGoalConstr subst obj)
+      else none
+    | _ => none
+  else match gid.toNat? with
+    | some n => (lookup n).map (substGoal subst)
+    | none => none
+
+/-- The id of the strict goal `#k+1`. -/
+def domStrictId (k : Nat) (gid : String) : Bool :=
+  hashNum? gid == some (k + 1)
+
+/-- Premises of the scopes of a `dom` subproof: `Spec[σ≤]` for `scope leq`,
+`Spec[σ≥]` for `scope geq` (normalized; CakePB `dom_subgoals` scopes). -/
+def domScopePrem (O : Sat.PB.Dominance.OrderData) (z : List Sat.PB.Literal)
+    (subst : List (Nat × Sat.PB.SubstVal)) : VeriPB.ScopeKind → Option (List Constr)
+  | .leq => some (O.spec.map (substGoal (Sat.PB.Dominance.sigmaLeq O z subst)))
+  | .geq => some (O.spec.map (substGoal (Sat.PB.Dominance.sigmaGeq O z subst)))
+
+/-- A `leq`-restricted `#` goal `G` with id `gid` is discharged: trivially
+true by a complementary pair, proved with compatible provenance, or implied
+by `¬C` (CakePB `check_hash_goals`). -/
+def domHashCovered (nC : Constr)
+    (proved : List (String × Constr × Option VeriPB.ScopeKind))
+    (gid : String) (G : Constr) : Bool :=
+  trivialByPair G ||
+    proved.any (fun p => p.1 == gid && provLeqOk p.2.2 && constrMatchNorm G p.2.1) ||
+    impliesSyntactic nC G
+
+/-- The order goals `#j, #j+1, ...` are discharged. -/
+def domOrderGoalsCovered (nC : Constr)
+    (proved : List (String × Constr × Option VeriPB.ScopeKind)) :
+    Nat → List Constr → Bool
+  | _, [] => true
+  | j, G :: gs => domHashCovered nC proved ("#" ++ toString j) G &&
+      domOrderGoalsCovered nC proved (j + 1) gs
+
+/-- The objective goal `gid` is discharged (no goal when `ω` does not touch
+the objective). -/
+def domObjCovered (subst : List (Nat × Sat.PB.SubstVal)) (nC : Constr)
+    (obj : Objective) (proved : List (String × Constr × Option VeriPB.ScopeKind))
+    (gid : String) : Bool :=
+  !Sat.PB.termsAffected subst obj || domHashCovered nC proved gid (objGoalConstr subst obj)
+
+/-- A numbered goal id that names a constraint of `goalDb`. -/
+def idInDb {α : Type} (goalDb : Std.HashMap Nat α) (gid : String) : Bool :=
+  !gid.startsWith "#" && match gid.toNat? with
+    | some n => goalDb.contains n
+    | none => false
+
+/-- The core goal of `D` in a `dom` step needs no subproof or has one
+(CakePB `subst_opt` and `split_goals`), as `dbGoalCovered` but with
+provenance: equality with a proved goal counts only for goals of core ids
+(`goalDb`) proved outside any scope or in `scope leq`. -/
+def dbGoalCoveredDom (subst : List (Nat × Sat.PB.SubstVal)) (nC : Constr)
+    (goalDb lookupDb : Std.HashMap Nat Constr)
+    (proved : List (String × Constr × Option VeriPB.ScopeKind)) (D : Constr) : Bool :=
+  touchedSatisfied subst D.terms ||
+    (let G := substGoal subst D
+     trivialByPair G ||
+     impliesSyntactic (VeriPB.normalizeConstr D) G ||
+     impliesSyntactic nC G ||
+     proved.any (fun p => provLeqOk p.2.2 && idInDb goalDb p.1 &&
+       constrMatchNorm G p.2.1) ||
+     constrInDB G lookupDb)
+
+/-! ### Redundance under a loaded order (`red`, checked `delc`)
+
+With the order `(O, z)` loaded the goals of `red C : ω` are (design §5, CakePB
+`red_subgoals`), `k = |O.defs|`: `#1` is `C|ω`, `#2..#k+1` the order goals
+`Def_j[σ≤]` (skipped when `ω` maps no variable of `z`, CakePB
+`skip_ord_subgoal`), `#k+2` the objective goal (only with an objective), and
+the database goals as without an order. `scope leq` (premises `Spec[σ≤]`) is
+allowed, `scope geq` is not (CakePB has a single scope for `red`). -/
+
+/-- `ω` maps no variable of the loaded literals `z` (CakePB
+`untouched_order_impl`; an identity entry `x -> x` counts as a touch). -/
+def untouchedOrder (z : List Sat.PB.Literal) (subst : List (Nat × Sat.PB.SubstVal)) :
+    Bool :=
+  z.all fun l => (Sat.PB.lookupSubst subst l.var).isNone
+
+/-- Some item of a subproof is a `scope` block (CakePB `has_scope`). -/
+def hasScope (items : List VeriPB.ProofStep) : Bool :=
+  items.any fun i => match i with
+    | .scope _ _ => true
+    | _ => false
+
+/-- Goal constraint of a `proofgoal` id in a `red` or checked-`delc` subproof
+under the loaded order `(O, z)`: `#1` is `C|ω`, `#j` (`2 ≤ j ≤ k+1`) the order
+goal `Def_{j-1}[σ≤]`, `#k+2` the objective goal (only with an objective), a
+number `n` the goal `D|ω` of the constraint `lookup n`. -/
+def redOrdGoalOf (O : Sat.PB.Dominance.OrderData) (z : List Sat.PB.Literal)
+    (subst : List (Nat × Sat.PB.SubstVal)) (C : Constr) (obj : Objective)
+    (lookup : Nat → Option Constr) (gid : String) : Option Constr :=
+  if gid.startsWith "#" then
+    match hashNum? gid with
+    | some 1 => some (substGoal subst C)
+    | some (j + 2) =>
+      if j < O.defs.length then
+        (O.defs[j]?).map (substGoal (Sat.PB.Dominance.sigmaLeq O z subst))
+      else if j == O.defs.length && !obj.isEmpty then
+        some (objGoalConstr subst obj)
+      else none
+    | _ => none
+  else match gid.toNat? with
+    | some n => (lookup n).map (substGoal subst)
+    | none => none
+
+/-- Premises of the scopes of a `red` subproof under a loaded order:
+`Spec[σ≤]` for `scope leq`; `scope geq` is rejected (CakePB `mk_scope`). -/
+def redScopePrem (O : Sat.PB.Dominance.OrderData) (z : List Sat.PB.Literal)
+    (subst : List (Nat × Sat.PB.SubstVal)) : VeriPB.ScopeKind → Option (List Constr)
+  | .leq => some (O.spec.map (substGoal (Sat.PB.Dominance.sigmaLeq O z subst)))
+  | .geq => none
+
+/-- The proved goals that count for a `leq`-restricted goal, without their
+provenance (the database goals of `red` reuse `dbGoalCovered`). -/
+def leqProved (proved : List (String × Constr × Option VeriPB.ScopeKind)) :
+    List (String × Constr) :=
+  proved.filterMap fun p => if provLeqOk p.2.2 then some (p.1, p.2.1) else none
+
 /-- Subproof nesting depth for fuel computation: `pbc`, `red`/`dom`
-(both forms), checked deletion with a subproof and `obju` consume one
-unit; a `proofgoal` block runs at the level of its subproof. -/
+(both forms), checked deletion with a subproof, `obju` and `def_order`
+consume one unit; `proofgoal` and `scope` blocks run at the level of their
+subproof. -/
 partial def pbcDepth : List VeriPB.ProofStep → Nat
   | [] => 0
   | .pbc _ inner _ :: rest =>
@@ -922,6 +1228,15 @@ partial def pbcDepth : List VeriPB.ProofStep → Nat
     max (1 + pbcDepth items.toList) (pbcDepth rest)
   | .proofgoal _ steps _ :: rest =>
     max (pbcDepth steps.toList) (pbcDepth rest)
+  | .scope _ items :: rest =>
+    max (pbcDepth items.toList) (pbcDepth rest)
+  | .defOrder od :: rest =>
+    -- spec `red` steps count one more unit than they need (harmless)
+    let inner := (od.spec.getD #[]).toList ++
+      (match od.transitivity with
+        | some t => t.proof.toList
+        | none => []) ++ (od.reflexivity.getD #[]).toList
+    max (1 + pbcDepth inner) (pbcDepth rest)
   | _ :: rest => pbcDepth rest
 
 end VeriPB.Reflect
