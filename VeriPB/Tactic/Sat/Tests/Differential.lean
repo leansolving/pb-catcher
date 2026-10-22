@@ -609,3 +609,97 @@ open VeriPB.Tests.Differential VeriPB.Reflect in
     (cd ++ "sat3_concl_before_output.pbp") none
   runExpect "php21_obj_unsat" (d ++ "php21_obj.opb") (d ++ "php21_kernel.pbp")
     (some Claim.unsat)
+
+-- interactions of the dominance statements (Tests/data/inter, design §7 B4;
+-- notes testcampaign/p3/tests2/NOTES.md). Verdicts of VeriPB 3.0.1 / CakePB
+-- in the comments; PBLean agrees with CakePB everywhere except c1_red and
+-- c1_dom (PARITY C1, accept side) and goalid_01_dom, goalid_02_red (PARITY B3,
+-- reject side). lex2 is the 2-bit lex order of Tests/data/dom, lex1 the 1-bit one.
+open VeriPB.Tests.Differential VeriPB.Reflect in
+#eval show IO Unit from do
+  let it := "VeriPB/Tactic/Sat/Tests/data/inter/"
+  -- (a) soli / obji / sol between doms (lex2 on x1 x3); the soli/obji
+  -- constraint is core and gets a core goal in the next dom
+  for (o, n, c) in [("wobj4", "soli_dom", Claim.bounds (some 2) (some 2)),  -- core goal 7 proved
+      ("wobj4", "obji_dom", Claim.bounds (some 2) (some 2)),  -- obji 2 instead of soli
+      ("wobj4", "sol_dom", Claim.bounds (some 2) (some 2)),   -- sol: no constraint, no core goal
+      ("wobj6", "soli_dom_obj", Claim.bounds (some 2) (some 5)),  -- objective goal #3 needs
+                                                -- the soli constraint 7 (x6 -> x5)
+      ("wobj6", "obji_dom_obj", Claim.bounds (some 2) (some 5)),  -- the same after obji 5
+      ("wobj4", "goalid_07_dom", Claim.bounds (some 2) (some 2))] do  -- (f) soli_dom with the
+                                                -- core goal written `07` (VeriPB rejects the
+                                                -- leading zero at parse time, CakePB accepts)
+    runExpect n (it ++ o ++ ".opb") (it ++ n ++ ".pbp") (some c)
+  -- accepted by both references unless noted
+  for (o, n) in [("sym4", "redef_loaded"),     -- (b) def_order lex2 (1-ary) while the 2-ary lex2
+                                                -- is loaded: the next dom still uses the loaded
+                                                -- definition; then load_order lex2 x3 (new) and a dom
+      ("sym4", "load_dup_ok"),                  -- (c) load_order lex2 x1 x1
+      ("sym4", "load_comp_ok"),                 -- (c) load_order lex2 x1 ~x1 (key x1 + 1)
+      ("sym4", "load_comprev_ok"),              -- (c) load_order lex2 ~x1 x1 (key 2 - x1)
+      ("delc2", "copy_delc_dom"),               -- (d) derived copy 3 of core c2, checked delc 2
+                                                -- with order goal, dom whose core goal equals copy 3
+      ("c1red5", "c1_red"),                     -- (e) PARITY C1: goal 2 discharged by the proved
+                                                -- goal 1 whose goal CakePB drops (c1 is a
+                                                -- contradiction); CakePB rejects, VeriPB accepts
+      ("c1red5", "c1_red_goal2"),               -- twin: goal 2 proved itself
+      ("c1red5", "c1_dom"),                     -- (e) C1 for a dom core goal (CakePB rejects)
+      ("c1red5", "c1_dom_goal2"),               -- twin
+      ("sym4", "goalid_02_strict"),             -- (f) strict goal written `#02` (numeric match;
+                                                -- VeriPB rejects at parse time)
+      ("ou5", "obju_dom"),                      -- (g) obju, then a dom whose objective goal
+                                                -- #3 for the NEW objective is implied by ¬C
+      ("sym4", "s2c_twodom_on_nodel"),          -- (h) dom, s2c on, dom
+      ("sym4", "s2c_twodom_off"),               -- (h) dom, on, off, dom, deld of its result
+      ("sym4", "dom_untouched_unsat"),          -- (i) witness untouches the order, ¬C contradicts
+                                                -- the database: qed : id
+      ("aux3", "red_two_leq"),                  -- (j) red under leaux, two scope leq blocks
+      ("aux3", "red_two_leq_b")] do             -- (j) the second block uses its own premise
+    runOne n (it ++ o ++ ".opb") (it ++ n ++ ".pbp")
+  for (o, n, k) in [("wobj4", "soli_dom_nogoal", 5),  -- (a) core goal of the soli constraint
+                                                -- missing (CakePB rejects, VeriPB autoproves)
+      ("wobj6", "soli_dom_obj_bad", 5),         -- (a) objective goal proof without the soli
+                                                -- constraint (both reject)
+      ("wobj6", "soli_dom_obj_nogoal", 5),      -- (a) objective goal missing (CakePB rejects,
+                                                -- VeriPB autoproves)
+      ("sym4", "redef_loaded_arity", 6),        -- (b) reload with the old arity (both reject)
+      ("sym4", "redef_loaded_derived", 6),      -- (b) load_order moved the first dom's result to
+                                                -- the core; its goal fails (both reject)
+      ("sym4", "load_dup_bad", 3),              -- (c) key increases (both reject)
+      ("sym4", "load_comp_bad", 3),             -- (c) (both reject)
+      ("sym4", "load_comprev_bad", 3),          -- (c) (both reject)
+      ("delc2", "copy_delc_deld_dom", 6),       -- (d) copy deleted: core goal 1 uncovered (both)
+      ("delc2", "copy_delc_dom_nocopy", 4),     -- (d) no copy (both reject)
+      ("one1", "delc_copy_unsound", 4),         -- (d) delc of core x1 >= 1 with a derived copy and
+                                                -- the empty witness; would lead to UNSAT of a
+                                                -- satisfiable formula (both reject)
+      ("one1", "delc_copy_ref", 4),             -- (d) the delc goal proved from the derived copy
+                                                -- (core-only subproof; both reject)
+      ("sym4", "goalid_01_dom", 3),             -- (f) order goal written `#01`: PARITY B3
+                                                -- (CakePB accepts, VeriPB rejects at parse time)
+      ("red3", "goalid_02_red", 3),             -- (f) red order goal written `#02`: PARITY B3
+      ("ou5", "obju_dom_noobju", 4),            -- (g) the OLD objective's goal #3 needs a proof
+                                                -- (CakePB rejects, VeriPB autoproves)
+      ("sym4", "s2c_twodom_on", 6),             -- (h) deld of the second dom's result under s2c
+                                                -- (both reject)
+      ("sym4", "s2c_twodom_off_deld8", 7),      -- (h) deld of the first dom's result, moved to
+                                                -- the core by `on` (CakePB rejects, VeriPB accepts)
+      ("sym4", "dom_untouched_strict", 3),      -- (i) strict goal impossible (both reject)
+      ("sym4", "dom_untouched_nostrict", 3),    -- (i) strict goal missing (both reject)
+      ("sym4", "dom_untouched_unsat_goal", 3),  -- (i) contradiction only inside proofgoal #2:
+                                                -- core goal 1 uncovered (CakePB rejects, VeriPB
+                                                -- autoproves)
+      ("aux3", "red_two_leq_stale", 3)] do      -- (j) premise of the first scope block used in
+                                                -- the second (both reject)
+    runOne n (it ++ o ++ ".opb") (it ++ n ++ ".pbp") (expectReject := some k)
+
+-- repeated witness entries (Tests/data/wit, found by the P3 mutation campaign):
+-- a repeated entry with the same target is accepted (VeriPB and CakePB accept),
+-- a conflicting one is rejected (CakePB rejects, VeriPB keeps the first entry)
+open VeriPB.Tests.Differential VeriPB.Reflect in
+#eval show IO Unit from do
+  let w := "VeriPB/Tactic/Sat/Tests/data/wit/"
+  runOne "dupwit_red" (w ++ "dupwit.opb") (w ++ "dupwit_red.pbp")
+  runOne "dupwit_red_twin" (w ++ "dupwit.opb") (w ++ "dupwit_red_twin.pbp")
+  runOne "dupwit_red_conflict" (w ++ "dupwit.opb") (w ++ "dupwit_red_conflict.pbp")
+    (expectReject := some 1)

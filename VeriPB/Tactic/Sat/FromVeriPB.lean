@@ -584,8 +584,6 @@ def parseSubstPairs (pairs : List (String × String)) (numVars : Nat) :
       if varIdx >= numVars then
         .error s!"substitution variable {varStr} (index {varIdx}) out of range \
           (numVars={numVars})"
-      else if seen.contains varIdx then
-        .error s!"duplicate substitution for variable {varStr} (index {varIdx})"
       else
         let sv : Sat.PB.SubstVal ←
           if valStr == "0" then .ok .zero
@@ -604,7 +602,13 @@ def parseSubstPairs (pairs : List (String × String)) (numVars : Nat) :
                 (numVars={numVars})"
             else .ok (.negLit j)
           | .error e => .error s!"invalid substitution value '{valStr}': {e}"
-        go rest (seen.insert varIdx) (acc ++ [(varIdx, sv)])
+        -- a repeated entry with the same target is ignored, a conflicting one is
+        -- an error (CakePB; VeriPB keeps the first)
+        match Sat.PB.lookupSubst acc varIdx with
+        | some sv' =>
+          if sv' == sv then go rest seen acc
+          else .error s!"conflicting substitutions for variable {varStr} (index {varIdx})"
+        | none => go rest (seen.insert varIdx) (acc ++ [(varIdx, sv)])
   go pairs ∅ []
 
 /-- Parse a coefficient string like "+1", "3", "-2" into an Int.

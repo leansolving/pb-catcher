@@ -1,0 +1,41 @@
+pseudo-Boolean proof version 3.0
+f 1;
+def_order lex1
+	vars
+		left u1;
+		right v1;
+		aux;
+	end;
+	def
+		1 ~u1 1 v1 >= 1;
+	end;
+	transitivity
+	vars
+		fresh_right w1;
+	end;
+	proof
+	proofgoal #1
+pol 1 2 + 3 +;
+	qed : 4;
+qed;
+	end;
+	reflexivity
+		proof
+			proofgoal #1
+			qed : 5;
+		qed;
+	end;
+end;
+load_order lex1 x1;
+pol 1 1 *;
+delc 1 : : subproof
+qed;
+dom 1 ~x1 >= 1 : x1 -> 0 : subproof
+	proofgoal #2
+	rup >= 1 : 4 5;
+	qed : 6;
+qed;
+rup >= 1 : 2 7;
+output NONE;
+conclusion UNSAT : 8;
+end pseudo-Boolean proof;

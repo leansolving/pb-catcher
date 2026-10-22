@@ -1,0 +1,4 @@
+* #variable= 6 #constraint= 2
+min: +2 x1 +1 x2 +2 x3 +1 x4 +3 x5 +3 x6 ;
++1 x1 +1 x2 >= 1 ;
++1 x3 +1 x4 >= 1 ;
