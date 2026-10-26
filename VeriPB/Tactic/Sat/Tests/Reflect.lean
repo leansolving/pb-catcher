@@ -42,6 +42,23 @@ veripb_reflect rup_prop_reflect
   "VeriPB/Tactic/Sat/Tests/data/rup_prop.opb"
   "VeriPB/Tactic/Sat/Tests/data/rup_prop_kernel.pbp"
 
+-- Input constraints and the pbc negation are normalized as in VeriPB and
+-- CakePB (all three accepted by both): a duplicated literal in an input
+-- constraint (`~x1 ~x1 ~x2 >= 1` propagates only as `2 ~x1 ~x2 >= 1`), a
+-- complementary pair in an input constraint, and a pbc target with a
+-- duplicated literal whose merged negation drives the subproof's rup.
+veripb_reflect dup_reflect
+  "VeriPB/Tactic/Sat/Tests/data/dup.opb"
+  "VeriPB/Tactic/Sat/Tests/data/dup_kernel.pbp"
+
+veripb_reflect dup_pair_reflect
+  "VeriPB/Tactic/Sat/Tests/data/dup_pair.opb"
+  "VeriPB/Tactic/Sat/Tests/data/dup_pair_kernel.pbp"
+
+veripb_reflect dup_pbc_reflect
+  "VeriPB/Tactic/Sat/Tests/data/dup_pbc.opb"
+  "VeriPB/Tactic/Sat/Tests/data/dup_pbc_kernel.pbp"
+
 -- Red subproof test: pigeon-hole variant with redundance-based strengthening.
 -- Uses red/dom with explicit subproof (proofgoal #1 and proofgoal 1).
 -- Tests: red rule, substitution parsing, goal verification, auto-satisfaction.

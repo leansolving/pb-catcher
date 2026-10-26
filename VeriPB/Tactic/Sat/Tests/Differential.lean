@@ -226,7 +226,7 @@ open VeriPB.Tests.Differential VeriPB.Reflect in
 #eval show IO Unit from do
   let d := "VeriPB/Tactic/Sat/Tests/data/"
   for n in ["php21", "red_subproof", "red_swap", "red_const", "red_neglit", "red_basic",
-      "weaken_cases", "rup_cases", "rup_prop"] do
+      "weaken_cases", "rup_cases", "rup_prop", "dup", "dup_pair", "dup_pbc"] do
     runOne n (d ++ n ++ ".opb") (d ++ n ++ "_kernel.pbp")
   -- rup (CakePB semantics: one pass over the hints in order, the negated
   -- target only through an explicit `~`, no hints = reject). rup_prop: one

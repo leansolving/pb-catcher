@@ -131,7 +131,7 @@ def mkDBRec : List Constr → Nat → Std.HashMap Nat Constr
 /-- Initialize check state from an array of constraints and an objective. -/
 def BoolCheckState.fromConstrs (constrs : Array Constr) (numVars : Nat)
     (objective : Objective) (offset : Int := 0) : BoolCheckState :=
-  { db := mkDBRec constrs.toList 1
+  { db := mkDBRec (constrs.toList.map VeriPB.normalizeConstr) 1
     origConstrs := constrs
     objective := objective
     offset := offset

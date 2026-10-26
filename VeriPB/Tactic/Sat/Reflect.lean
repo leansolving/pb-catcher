@@ -640,7 +640,8 @@ def execStepsFuel (fuel : Nat) (state : BoolCheckState)
             else
               let savedDb := state.db
               let negId := state.nextId
-              let dbWithNeg := state.db.insert negId pbConstr.negate
+              let dbWithNeg := state.db.insert negId
+                (VeriPB.normalizeConstr pbConstr.negate)
               let subState : BoolCheckState :=
                 { state with db := dbWithNeg, nextId := negId + 1 }
               match execStepsFuel n subState innerSteps.toList with
@@ -957,12 +958,6 @@ theorem mkDBRec_mem (cs : List Constr) (startIdx : Nat) (id : Nat)
       exact List.Mem.head _
     · simp only [heq, Bool.false_eq_true, ↓reduceIte] at hget
       exact List.Mem.tail _ (ih (startIdx + 1) hget)
-
-theorem init_sound (constrs : Array Constr) (numVars : Nat) (obj : Objective) :
-    DBSound constrs (BoolCheckState.fromConstrs constrs numVars obj).db :=
-  fun id c hc v hsat => by
-    simp only [BoolCheckState.fromConstrs] at hc
-    exact hsat c (mkDBRec_mem constrs.toList 1 id c hc)
 
 /-! ## Soundness proofs -/
 
@@ -3200,7 +3195,8 @@ theorem execStepsFuel_implied : ∀ (fuel : Nat)
                 match hinner :
                     execStepsFuel n
                       { state with
-                        db := state.db.insert state.nextId pbConstr.negate
+                        db := state.db.insert state.nextId
+                          (VeriPB.normalizeConstr pbConstr.negate)
                         nextId := state.nextId + 1 }
                       innerSteps.toList with
                 | some finalSub =>
@@ -3218,7 +3214,8 @@ theorem execStepsFuel_implied : ∀ (fuel : Nat)
                       intro hneg_sat
                       have hfin := ih_fuel n (by omega) _ finalSub
                         innerSteps.toList (lsteps_of_not_any innerSteps hany)
-                        hinner v (DBSatBy_insert _ _ _ v hv hneg_sat)
+                        hinner v (DBSatBy_insert _ _ _ v hv
+                          (normalize_sat _ v hneg_sat))
                       exact contra_unsat c v (by
                         simp [Constr.isContra] at hcontra; exact hcontra)
                         (hfin resultId c (by rwa [Std.HashMap.get?_eq_getElem?]))
@@ -3316,7 +3313,8 @@ theorem execStepsFuel_nextId_le : ∀ (fuel : Nat)
                 match hinner :
                     execStepsFuel n
                       { state with
-                        db := state.db.insert state.nextId pbConstr.negate
+                        db := state.db.insert state.nextId
+                          (VeriPB.normalizeConstr pbConstr.negate)
                         nextId := state.nextId + 1 }
                       innerSteps.toList with
                 | some finalSub =>
@@ -5078,13 +5076,16 @@ theorem delcCheckedStep_spec
 theorem StateInv_init (F : Array Constr) (numVars : Nat) (obj : Objective)
     (offset : Int := 0) :
     StateInv (BoolCheckState.fromConstrs F numVars obj offset) :=
-  ⟨fun v hF _ => ⟨v, fun id c hget => hF c (mkDBRec_mem F.toList 1 id c hget),
+  ⟨fun v hF _ => ⟨v, fun id c hget => by
+      obtain ⟨c0, hc0, rfl⟩ := List.mem_map.mp
+        (mkDBRec_mem (F.toList.map VeriPB.normalizeConstr) 1 id c hget)
+      exact normalize_sat c0 v (hF c0 hc0),
     Int.le_refl _⟩,
    fun b hb => by simp [BoolCheckState.fromConstrs] at hb,
    fun hs => by simp [BoolCheckState.fromConstrs] at hs,
    fun id c hget => by
-     have := mkDBRec_lt F.toList 1 id c hget
-     simp only [Array.length_toList] at this
+     have := mkDBRec_lt (F.toList.map VeriPB.normalizeConstr) 1 id c hget
+     simp only [List.length_map, Array.length_toList] at this
      show id < F.size + 1
      omega,
    fun p hp => by simp [BoolCheckState.fromConstrs] at hp,
@@ -5296,7 +5297,8 @@ theorem execStepsFuel_inv_preserve_fields : ∀ (fuel : Nat)
               match hinner :
                   execStepsFuel n
                     { state with
-                      db := state.db.insert state.nextId pbConstr.negate
+                      db := state.db.insert state.nextId
+                        (VeriPB.normalizeConstr pbConstr.negate)
                       nextId := state.nextId + 1 }
                     innerSteps.toList with
               | some finalSub =>
@@ -5317,7 +5319,8 @@ theorem execStepsFuel_inv_preserve_fields : ∀ (fuel : Nat)
                       intro hneg_sat
                       have hfin := execStepsFuel_implied n _ finalSub
                         innerSteps.toList (lsteps_of_not_any innerSteps hany)
-                        hinner v (DBSatBy_insert _ _ _ v hdb hneg_sat)
+                        hinner v (DBSatBy_insert _ _ _ v hdb
+                          (normalize_sat _ v hneg_sat))
                       exact contra_unsat c v (by
                         simp [Constr.isContra] at hcontra; exact hcontra)
                         (hfin resultId c (by rwa [Std.HashMap.get?_eq_getElem?]))

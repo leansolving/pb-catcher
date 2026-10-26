@@ -519,7 +519,7 @@ def FBoolCheckState.fromConstrs (constrs : Array Constr)
     (numVars : Nat) (objective : Objective) (offset : Int := 0) :
     FBoolCheckState :=
   { db := constrs.foldl (fun (db, i) c =>
-      (db.insert i (toFConstr c), i + 1)) ({}, 1) |>.1
+      (db.insert i (normalizeFConstr (toFConstr c)), i + 1)) ({}, 1) |>.1
     origConstrs := constrs
     objective := objective
     offset := offset
@@ -1249,7 +1249,8 @@ def execFStepsFuel (fuel : Nat) (state : FBoolCheckState)
             else
               let savedDb := state.db
               let negId := state.nextId
-              let dbWithNeg := state.db.insert negId (fc.negateWith cs)
+              let dbWithNeg := state.db.insert negId
+                (normalizeFConstr (fc.negateWith cs))
               let subState : FBoolCheckState :=
                 { state with db := dbWithNeg, nextId := negId + 1 }
               match execFStepsFuel n subState innerSteps.toList with
