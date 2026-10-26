@@ -23,9 +23,10 @@ open VeriPB.Tests.Differential in
     ("binpack", "bp12_5"),
     ("eqcoloring", "k331_4"),
     ("langford", "langford5"), ("langford", "langford6"), ("langford", "langford9"),
+    ("langford", "langford10"),
     ("schur", "schur5"), ("schur", "schur14_3"),
     ("vdw", "vdw9"), ("vdw", "vdw35"),
-    ("ramsey", "ramsey6"), ("ramsey", "ramsey9_34"),
+    ("ramsey", "ramsey6"), ("ramsey", "ramsey9_34"), ("ramsey", "ramsey14_35"),
     ("paley", "Paley_13"), ("paley", "Paley_17"), ("paley", "Paley_29"), ("paley", "Paley_37"),
     ("paley", "Paley_41"), ("paley", "Paley_53"), ("paley", "Paley_61"), ("paley", "Paley_73"),
     ("paley", "Paley_89"), ("paley", "Paley_97"), ("paley", "Paley_101")

@@ -63,11 +63,12 @@ theorem paley_alpha_not_monotone :
       independenceNumber (paley p) a ∧ independenceNumber (paley q) b ∧ a > b
 ```
 
-**Langford pairing** (`Langford.lean`) — No Langford pairing of orders 6 and 9 exists.
+**Langford pairing** (`Langford.lean`) — No Langford pairing of orders 6, 9 and 10 exists. The order-10 proof is satsuma's symmetry breaking (`def_order`, `load_order`, one `dom` step) followed by CaDiCaL's core lemmas as `rup` steps.
 ```lean
 -- Langford namespace
 theorem langford6_impossible : ¬hasLangfordPairing 6
 theorem langford9_impossible : ¬hasLangfordPairing 9
+theorem langford10_impossible : ¬hasLangfordPairing 10
 ```
 
 **Schur number** (`Schur.lean`) — S(2) = 4: {1,...,4} has a Schur-free 2-coloring but {1,...,5} does not. Generalized to k-coloring: S(3) = 13 verified via one-hot encoding.
@@ -84,11 +85,12 @@ theorem vdw_number_2_3 : vanDerWaerdenNumber 8
 theorem vdw35_impossible : ¬hasKAPFreeColoring 4 35
 ```
 
-**Ramsey number** (`Ramsey.lean`) — R(3,3) = 6: K₅ has a triangle-free 2-coloring but K₆ does not. Generalized to asymmetric R(s,t): R(3,4) ≤ 9 verified.
+**Ramsey number** (`Ramsey.lean`) — R(3,3) = 6: K₅ has a triangle-free 2-coloring but K₆ does not. Generalized to asymmetric R(s,t): R(3,4) ≤ 9 and R(3,5) ≤ 14 verified. The R(3,5) proof breaks the vertex symmetry with satsuma's dominance steps (13 `dom` steps under a lexicographic order) before the CDCL refutation; plain CDCL does not refute the unbroken K₁₄ formula within 20 minutes.
 ```lean
 -- Ramsey namespace
 theorem ramsey_3_3 : ramseyNumber 5
 theorem ramsey9_34_impossible : ¬hasAsymRamseyFreeColoring 9 3 4
+theorem ramsey14_35_impossible : ¬hasAsymRamseyFreeColoring 14 3 5
 ```
 
 **Equitable coloring** (`EquitableColoring.lean`) — The equitable chromatic number of K_{3,3,1} is 5.

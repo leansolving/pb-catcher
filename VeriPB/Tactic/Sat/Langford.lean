@@ -559,4 +559,10 @@ langford_reflect langford6_impossible 6
 langford_reflect langford9_impossible 9
   "applications/langford/langford9_kernel.pbp"
 
+-- L(2,10) has no solution. RoundingSat does not finish this instance; the
+-- proof is satsuma's symmetry breaking (one dom step for sequence reversal)
+-- followed by CaDiCaL's core lemmas as rup steps (16 MB kernel proof).
+langford_reflect langford10_impossible 10
+  "applications/langford/langford10_kernel.pbp"
+
 end Langford

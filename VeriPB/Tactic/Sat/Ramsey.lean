@@ -673,4 +673,13 @@ elab "ramsey_asym_reflect " nm:ident ppSpace nTerm:num
 ramsey_asym_reflect ramsey9_34_impossible 9 3 4
   "applications/ramsey/ramsey9_34_kernel.pbp"
 
+-- R(3,5) upper bound: K_14 has no 2-coloring avoiding red K_3 and blue K_5
+-- 91 edge variables, 2366 constraints (364 no-red-triangle + 2002 no-blue-K_5).
+-- The proof breaks the vertex symmetry first (satsuma: def_order, load_order,
+-- 13 dom steps under the order) and then refutes the symmetry-broken formula
+-- with CaDiCaL's core lemmas as rup steps; plain CDCL does not refute the
+-- unbroken formula within 20 minutes.
+ramsey_asym_reflect ramsey14_35_impossible 14 3 5
+  "applications/ramsey/ramsey14_35_kernel.pbp"
+
 end Ramsey
