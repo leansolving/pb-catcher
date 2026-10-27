@@ -10,7 +10,7 @@ Every theorem of the project may depend only on `propext`, `Classical.choice`,
 introduces for native evaluation of the checker. Anything else (in particular
 `sorryAx`) fails the run with a nonzero exit code.
 -/
-import VeriPB
+import PBCatcher
 
 open Lean
 
@@ -25,7 +25,7 @@ def isAllowed (ax : Name) : Bool :=
   allowed.contains ax || isNative ax
 
 def isProjectModule (m : Name) : Bool :=
-  m.getRoot == `VeriPB || m == `VeriPBKernel
+  m.getRoot == `PBCatcher || m == `PBCatcherKernel
 
 run_cmd do
   let env ← getEnv

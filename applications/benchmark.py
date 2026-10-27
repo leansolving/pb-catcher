@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.9"
+# dependencies = []
+# ///
 """
 Benchmark all showcase theorems for VeriPB application instances.
 Produces timing tables in milliseconds.
@@ -9,6 +13,8 @@ Usage:
     python3 benchmark.py --direct  # Also run direct (Expr-building) method
     python3 benchmark.py --paley   # Only Paley instances
     python3 benchmark.py --comb    # Only combinatorial instances
+    python3 benchmark.py --mis     # Only Paley optimization proofs (paley_mis/)
+    (or `uv run applications/benchmark.py ...`)
 
 Requirements:
     - lake (Lean 4 build tool) available in PATH
@@ -36,14 +42,14 @@ VERIBP_DIR = os.path.dirname(SCRIPT_DIR)
 def dynlib_args():
     """`--load-dynlib` flag for the precompiled checker library.
 
-    `lake build` passes `libveripb_VeriPBReflect` (the shared library of the
-    `VeriPBReflect` lib) to every module that imports the checker; a plain
+    `lake build` passes `libPBCatcher_PBCatcherReflect` (the shared library of the
+    `PBCatcherReflect` lib) to every module that imports the checker; a plain
     `lake env lean <file>` does not, and then the checker runs in the IR
     interpreter (about 20x slower, e.g. 157 s instead of 9 s on Paley(101)
     with v0.3.1)."""
     libdir = os.path.join(VERIBP_DIR, ".lake", "build", "lib")
     for ext in ("dylib", "so"):
-        lib = os.path.join(libdir, f"libveripb_VeriPBReflect.{ext}")
+        lib = os.path.join(libdir, f"libPBCatcher_PBCatcherReflect.{ext}")
         if os.path.exists(lib):
             return [f"--load-dynlib={lib}"]
     sys.stderr.write("warning: precompiled checker library missing; "
@@ -156,6 +162,17 @@ def paley_alpha(opb_path):
     return budget - 1
 
 
+def mis_alpha(kernel_path):
+    """alpha from the `conclusion BOUNDS lb : ...` line of a paley_mis proof
+    (objective min: -sum x_i, so alpha = -lb); '?' if absent."""
+    with open(kernel_path) as f:
+        for line in f:
+            m = re.match(r'conclusion BOUNDS (-?\d+)', line)
+            if m:
+                return -int(m.group(1))
+    return '?'
+
+
 def paley_edges(p):
     """Number of edges in Paley(p): p*(p-1)/4."""
     return p * (p - 1) // 4
@@ -245,6 +262,10 @@ def main():
         '--comb', action='store_true',
         help='Only combinatorial instances')
     parser.add_argument(
+        '--mis', action='store_true',
+        help='Only the Paley optimization proofs (paley_mis/, '
+             'conclusion BOUNDS; reflect method only)')
+    parser.add_argument(
         '--direct', action='store_true',
         help='Also run direct (Expr-building) method')
     parser.add_argument(
@@ -261,7 +282,7 @@ def main():
     # ----------------------------------------------------------
     # Combinatorial showcase
     # ----------------------------------------------------------
-    if not args.paley:
+    if not (args.paley or args.mis):
         print(f"\n{'='*80}")
         print("Combinatorial Showcase Theorems")
         print(f"{'='*80}")
@@ -282,7 +303,7 @@ def main():
             l = proof_lines(inst['kernel'])
 
             lean_code = (
-                'import VeriPB.Tactic.Sat.Reflect\n'
+                'import PBCatcher.Reflect\n'
                 f'veripb_reflect bench\n'
                 f'  "{inst["opb"]}"\n'
                 f'  "{inst["kernel"]}"\n'
@@ -296,7 +317,7 @@ def main():
             direct_str = ''
             if args.direct:
                 direct_lean = (
-                    'import VeriPB.Tactic.Sat.FromVeriPB\n'
+                    'import PBCatcher.FromVeriPB\n'
                     f'opb_veripb_file bench\n'
                     f'  "{inst["opb"]}"\n'
                     f'  "{inst["kernel"]}"\n'
@@ -315,7 +336,7 @@ def main():
     # ----------------------------------------------------------
     # Paley independent set
     # ----------------------------------------------------------
-    if not args.comb:
+    if not (args.comb or args.mis):
         print(f"\n{'='*80}")
         print("Independent Set on Paley Graphs")
         print(f"{'='*80}")
@@ -349,7 +370,7 @@ def main():
             l = proof_lines(kernel)
 
             lean_code = (
-                'import VeriPB.Tactic.Sat.Reflect\n'
+                'import PBCatcher.Reflect\n'
                 'set_option maxRecDepth 200000\n'
                 'set_option maxHeartbeats 800000\n'
                 f'veripb_reflect bench\n'
@@ -365,7 +386,7 @@ def main():
             direct_str = ''
             if args.direct:
                 direct_lean = (
-                    'import VeriPB.Tactic.Sat.FromVeriPB\n'
+                    'import PBCatcher.FromVeriPB\n'
                     f'opb_veripb_file bench\n'
                     f'  "{opb}"\n'
                     f'  "{kernel}"\n'
@@ -380,6 +401,39 @@ def main():
             print(f"{p:>4} {m:>6} {alpha:>3} "
                   f"{l:>6}"
                   f"{solve_str}{direct_str}{reflect_str}")
+
+    # ----------------------------------------------------------
+    # Paley maximum independent set (optimization proofs)
+    # ----------------------------------------------------------
+    if args.mis:
+        print(f"\n{'='*80}")
+        print("Maximum Independent Set on Paley Graphs (conclusion BOUNDS)")
+        print(f"{'='*80}")
+        hdr = ' '.join([f"{'p':>4}", f"{'m':>6}", f"{chr(945):>3}",
+                        f"{'Lines':>6}", f"{'Reflect':>8}"])
+        print(hdr)
+        print("-" * len(hdr))
+
+        for p in PALEY_PRIMES:
+            opb = os.path.join(
+                SCRIPT_DIR, 'paley_mis', f'Paley_{p}_mis.opb')
+            kernel = os.path.join(
+                SCRIPT_DIR, 'paley_mis', f'Paley_{p}_mis_kernel.pbp')
+            if not (os.path.exists(opb) and os.path.exists(kernel)):
+                print(f"{p:>4}  — OPB or kernel proof missing")
+                continue
+
+            lean_code = (
+                'import PBCatcher.Reflect\n'
+                'set_option maxRecDepth 200000\n'
+                'set_option maxHeartbeats 800000\n'
+                f'veripb_reflect bench\n'
+                f'  "{opb}"\n'
+                f'  "{kernel}"\n'
+            )
+            r_ms, r_ok = run_lean(lean_code, timeout=args.timeout)
+            print(f"{p:>4} {paley_edges(p):>6} {mis_alpha(kernel):>3} "
+                  f"{proof_lines(kernel):>6}{fmt_result(r_ms, r_ok)}")
 
     print()
 

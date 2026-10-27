@@ -1,12 +1,12 @@
-# PBLean: VeriPB Proof Certificates for Lean 4
+# pb-catcher: VeriPB Proof Certificates for Lean 4
 
-[![CI](https://github.com/leansolving/pblean/actions/workflows/ci.yml/badge.svg)](https://github.com/leansolving/pblean/actions/workflows/ci.yml)
+[![CI](https://github.com/leansolving/pb-catcher/actions/workflows/ci.yml/badge.svg)](https://github.com/leansolving/pb-catcher/actions/workflows/ci.yml)
 [![Lean](https://img.shields.io/badge/Lean-v4.30.0-blue)](https://github.com/leanprover/lean4/releases/tag/v4.30.0)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-**PBLean** provides verified pseudo-Boolean proof checking in Lean 4. Reads [VeriPB](https://gitlab.com/MIAOresearch/software/VeriPB) kernel-format proofs and produces Lean theorems, analogous to `Std.Tactic.BVDecide` (LRAT) but for pseudo-Boolean reasoning. VeriPB's kernel format is the fully-elaborated proof format produced by `veripb --elaborate`, in which every inference step is made explicit. Standalone Lean 4 project with no Mathlib dependency.
+**pb-catcher** provides verified pseudo-Boolean proof checking in Lean 4. Reads [VeriPB](https://gitlab.com/MIAOresearch/software/VeriPB) kernel-format proofs and produces Lean theorems, analogous to `Std.Tactic.BVDecide` (LRAT) but for pseudo-Boolean reasoning. VeriPB's kernel format is the fully-elaborated proof format produced by `veripb --elaborate`, in which every inference step is made explicit. Standalone Lean 4 project with no Mathlib dependency.
 
-**Paper:** S. Szeider. *PBLean: Pseudo-Boolean Proof Certificates for Lean 4.* [arXiv:2602.08692](https://arxiv.org/abs/2602.08692), 2026.
+**Paper:** S. Szeider. *PBLean: Pseudo-Boolean Proof Certificates for Lean 4.* [arXiv:2602.08692](https://arxiv.org/abs/2602.08692), 2026. The tool was called PBLean until v0.6.0; it is part of the catcher family with [lrat-catcher](https://github.com/leansolving/lrat-catcher) and [count-catcher](https://github.com/leansolving/count-catcher).
 
 ## Architecture
 
@@ -14,16 +14,16 @@ Three-layer design mirroring LRAT:
 
 | Layer | File | Description |
 |-------|------|-------------|
-| Kernel | `VeriPB/Tactic/Sat/PseudoBoolean.lean` | PB constraint types, evaluation, soundness lemmas |
-| Kernel | `VeriPB/Tactic/Sat/Dominance.lean` | Order semantics and soundness theorems of the dominance rule |
-| Metaprogram | `VeriPB/Tactic/Sat/FromVeriPB.lean` | Parser, normalization, `Expr`-level proof construction |
-| Reflection | `VeriPB/Tactic/Sat/ReflectCheck.lean` | Verified checker definitions (pol, RUP, redundance, dominance and order goals) |
-| Reflection | `VeriPB/Tactic/Sat/ReflectFast.lean` | Runtime implementation of the checker (`@[implemented_by]`) |
-| Reflection | `VeriPB/Tactic/Sat/Reflect.lean` | `checkProofBool`, `proofClaim?`, soundness proofs, `veripb_reflect`, `mkFormulaUnsatProof` |
+| Kernel | `PBCatcher/PseudoBoolean.lean` | PB constraint types, evaluation, soundness lemmas |
+| Kernel | `PBCatcher/Dominance.lean` | Order semantics and soundness theorems of the dominance rule |
+| Metaprogram | `PBCatcher/FromVeriPB.lean` | Parser, normalization, `Expr`-level proof construction |
+| Reflection | `PBCatcher/ReflectCheck.lean` | Verified checker definitions (pol, RUP, redundance, dominance and order goals) |
+| Reflection | `PBCatcher/ReflectFast.lean` | Runtime implementation of the checker (`@[implemented_by]`) |
+| Reflection | `PBCatcher/Reflect.lean` | `checkProofBool`, `proofClaim?`, soundness proofs, `veripb_reflect`, `mkFormulaUnsatProof` |
 
 Verification uses reflection: a Boolean checker with a proved soundness theorem, executed as compiled native code via `native_decide` (same trade-off as `bv_decide`). The verified checker is written over lists for provability; at runtime `@[implemented_by]` swaps in an array-based implementation that must be extensionally equal to it. That equality is tested, not proved: `Tests/Normalize.lean` and `Tests/FastConstr.lean` compare the runtime operations against verbatim copies of the verified definitions on random inputs, and `Tests/Differential.lean` (and `applications/difftest.lean` for the large proofs) runs both checkers side by side and requires identical constraint databases after every proof step.
 
-Downstream projects that produce `formulaUnsat` theorems from their own encodings can call `VeriPB.Reflect.mkFormulaUnsatProof` to build the reflection bridge term instead of assembling it by hand.
+Downstream projects that produce `formulaUnsat` theorems from their own encodings can call `PBCatcher.Reflect.mkFormulaUnsatProof` to build the reflection bridge term instead of assembling it by hand.
 
 `veripb_reflect name "f.opb" "p.pbp"` registers a theorem that matches the proof's conclusion: `formulaUnsat F` for `conclusion UNSAT`, `formulaSatisfiable F` for `conclusion SAT`, and `formulaBounds F obj offset lb ub` for `conclusion BOUNDS lb : id ub` (every solution has objective value at least `lb`, some solution has value at most `ub`; `none` stands for `INF`). The objective in the statement is the normalized min-form objective `objVal obj v + offset` (normalized nonnegative terms `obj`, constant `offset`). For `max: f` the parser negates the objective, as VeriPB does, so the statement is about `−f`: `lb` gives `f ≤ −lb` for every solution and `ub` gives a solution with `f ≥ −ub`. `formulaBounds_optimum` turns equal bounds into the optimum. The conclusion must close the proof as in VeriPB and CakePB: the only `output` line (`output NONE ;`, or an output claim `output DERIVABLE|EQUISATISFIABLE|EQUIOPTIMAL FILE ;` accepted under CakePB's bound-side conditions; the claim about the output formula is not certified, and the message says so), then the only `conclusion` line, then the end line.
 
@@ -31,7 +31,7 @@ Downstream projects that produce `formulaUnsat` theorems from their own encoding
 
 `pol` (polynomial arithmetic: `+`, `*`, `d`, `s`, `w` weakening, `-`, `c` division in variable form, `n`/`m` mixed-integer rounding), `rup` (reverse unit propagation), `ia` (implication), `pbc`/`subproof`/`qed` (proof by contradiction), `red` (redundance-based strengthening with explicit subproofs and proof goals), `deld`/`delc` (deletion, including checked core deletion `delc id : witness : subproof`), `core`, `strengthening_to_core`, `sol`/`soli`/`obji` (solution logging and objective-improvement assertions), `eobj`/`obju new|diff` (objective equality and objective updates with core-only subproofs), `f` (formula size), `output NONE` and `output DERIVABLE/EQUISATISFIABLE/EQUIOPTIMAL FILE` (accepted as footers under CakePB's bound-side preconditions; the claim about the output formula itself is not certified, the registered theorem is the conclusion's), `conclusion UNSAT/SAT/BOUNDS/NONE`, `def_order` (spec, transitivity and reflexivity proofs checked, with CakePB's fresh-variable conditions), `load_order`, `dom` (dominance-based strengthening under a loaded order, with `scope leq`/`scope geq` blocks and CakePB's fresh-variable conditions), and `red`, checked `delc` and `obju` while an order is loaded (`red` and checked `delc` with the order goals, `scope leq` and CakePB's fresh-variable conditions). Parsed but rejected by the checker: `output ... IMPLICIT/PERMUTATION/CONSTRAINTS`.
 
-Known differences to VeriPB 3 and CakePB. PBLean rejects some proofs that VeriPB and CakePB accept: input constraints are used as written, not normalized; all `rup` hint ids are resolved before propagation, so an unknown id after the conflicting hint rejects the step; `dom` follows CakePB: it needs a loaded order, its core, order and objective goals need a proof or a syntactic discharge, and its strict goal needs an explicit `proofgoal` outside any scope or in `scope geq` (VeriPB autoproves missing goals and accepts `dom` without an order); under a loaded order `red` and checked `delc` need their order goals (unless the witness maps no variable of the loaded literals) and their objective goal proved or syntactically discharged (VeriPB autoproves them), and a plain `delc` needs every constraint in the core (CakePB; VeriPB accepts); under `strengthening_to_core`, every constraint joins the core at `on`, and the `red` goals of core constraints need a proof or a syntactic discharge (CakePB; VeriPB only sets a flag and autoproves missing goals); a goal id with a leading zero (`#01`) never counts as proved; `scope leq` in a `red` without a loaded order is rejected (CakePB accepts it with no premises); the order's aux variables must not occur in the database, the constraint, the objective or the witness image at every `dom`, and at a `red` or checked `delc` that uses a scope or touches the loaded literals and does not close with `qed : id` (CakePB; VeriPB checks none of these conditions and accepts such proofs); a `def_order` without a reflexivity block is rejected (CakePB; VeriPB accepts it when every reflexivity goal is trivial), and so are `load_order ;` with no order loaded, a `spec` block with a step other than `red`, and transitivity fresh variables that overlap the order's variables (all CakePB; VeriPB accepts); an `obju` without `: subproof`, with a closing `qed : id`, or with an unproved non-trivial goal is rejected (VeriPB autoproves such goals, CakePB rejects them). An OPB objective without terms counts as absent, so `obji`/`eobj`/`obju` on it are rejected (both references accept), and an objective without terms, also one that `obju` reduced to a constant, has no objective goal in `red` and `dom`: a `proofgoal` for `#k+2` (`#2` without an order) is then rejected (CakePB has the goal, trivially true). Output claims `output G FILE` are accepted without the output formula when the bound-side conditions hold (CakePB rejects `EQUISATISFIABLE`/`EQUIOPTIMAL` without the file); `sol : v` on an instance without objective is accepted with `v = 0` (CakePB; VeriPB rejects). PBLean accepts some proofs that VeriPB rejects, without losing soundness: a negative degree is clamped to 0, which gives a stronger constraint; checked deletion under strengthening-to-core does not require an empty witness (CakePB accepts this too); and a database goal of `red` or a core goal of `dom` may be discharged by equality with any proved goal of compatible scope, also one whose own goal CakePB skips as trivial (CakePB then rejects). Conclusions follow CakePB: an upper bound above the best solution value and `conclusion SAT`/`UNSAT` on an instance with an objective are accepted (VeriPB rejects them), and the lower bound of `conclusion BOUNDS` needs its hint `lb : id`, whose constraint must imply the bound even when the database contains a contradiction elsewhere (VeriPB searches the database). `conclusion UNSAT` after a logged solution and `scope geq` in a `red` are rejected, as by both references. `conclusion SAT : ;` is read as the all-false assignment, as CakePB does; VeriPB reads it as no hint (likewise an upper bound `ub : ;`).
+Known differences to VeriPB 3 and CakePB. pb-catcher rejects some proofs that VeriPB and CakePB accept: all `rup` hint ids are resolved before propagation, so an unknown id after the conflicting hint rejects the step; `dom` follows CakePB: it needs a loaded order, its core, order and objective goals need a proof or a syntactic discharge, and its strict goal needs an explicit `proofgoal` outside any scope or in `scope geq` (VeriPB autoproves missing goals and accepts `dom` without an order); under a loaded order `red` and checked `delc` need their order goals (unless the witness maps no variable of the loaded literals) and their objective goal proved or syntactically discharged (VeriPB autoproves them), and a plain `delc` needs every constraint in the core (CakePB; VeriPB accepts); under `strengthening_to_core`, every constraint joins the core at `on`, and the `red` goals of core constraints need a proof or a syntactic discharge (CakePB; VeriPB only sets a flag and autoproves missing goals); a goal id with a leading zero (`#01`) never counts as proved; `scope leq` in a `red` without a loaded order is rejected (CakePB accepts it with no premises); the order's aux variables must not occur in the database, the constraint, the objective or the witness image at every `dom`, and at a `red` or checked `delc` that uses a scope or touches the loaded literals and does not close with `qed : id` (CakePB; VeriPB checks none of these conditions and accepts such proofs); a `def_order` without a reflexivity block is rejected (CakePB; VeriPB accepts it when every reflexivity goal is trivial), and so are `load_order ;` with no order loaded, a `spec` block with a step other than `red`, and transitivity fresh variables that overlap the order's variables (all CakePB; VeriPB accepts); an `obju` without `: subproof`, with a closing `qed : id`, or with an unproved non-trivial goal is rejected (VeriPB autoproves such goals, CakePB rejects them). An OPB objective without terms counts as absent, so `obji`/`eobj`/`obju` on it are rejected (both references accept), and an objective without terms, also one that `obju` reduced to a constant, has no objective goal in `red` and `dom`: a `proofgoal` for `#k+2` (`#2` without an order) is then rejected (CakePB has the goal, trivially true). Output claims `output G FILE` are accepted without the output formula when the bound-side conditions hold (CakePB rejects `EQUISATISFIABLE`/`EQUIOPTIMAL` without the file); `sol : v` on an instance without objective is accepted with `v = 0` (CakePB; VeriPB rejects). pb-catcher accepts some proofs that VeriPB rejects, without losing soundness: a negative degree is clamped to 0, which gives a stronger constraint; checked deletion under strengthening-to-core does not require an empty witness (CakePB accepts this too); and a database goal of `red` or a core goal of `dom` may be discharged by equality with any proved goal of compatible scope, also one whose own goal CakePB skips as trivial (CakePB then rejects). Conclusions follow CakePB: an upper bound above the best solution value and `conclusion SAT`/`UNSAT` on an instance with an objective are accepted (VeriPB rejects them), and the lower bound of `conclusion BOUNDS` needs its hint `lb : id`, whose constraint must imply the bound even when the database contains a contradiction elsewhere (VeriPB searches the database). `conclusion UNSAT` after a logged solution and `scope geq` in a `red` are rejected, as by both references. `conclusion SAT : ;` is read as the all-false assignment, as CakePB does; VeriPB reads it as no hint (likewise an upper bound `ub : ;`).
 
 In `veripb_reflect`, `rup C : hints` is checked by verified PB unit propagation as CakePB checks it: one pass over the hints in order, the negated target through an explicit `~`. The Expr-level `veripb_proof` path keeps its addition-based certificate.
 
@@ -63,11 +63,12 @@ theorem paley_alpha_not_monotone :
       independenceNumber (paley p) a ∧ independenceNumber (paley q) b ∧ a > b
 ```
 
-**Langford pairing** (`Langford.lean`) — No Langford pairing of orders 6 and 9 exists.
+**Langford pairing** (`Langford.lean`) — No Langford pairing of orders 6, 9 and 10 exists. The order-10 proof is satsuma's symmetry breaking (`def_order`, `load_order`, one `dom` step) followed by CaDiCaL's core lemmas as `rup` steps.
 ```lean
 -- Langford namespace
 theorem langford6_impossible : ¬hasLangfordPairing 6
 theorem langford9_impossible : ¬hasLangfordPairing 9
+theorem langford10_impossible : ¬hasLangfordPairing 10
 ```
 
 **Schur number** (`Schur.lean`) — S(2) = 4: {1,...,4} has a Schur-free 2-coloring but {1,...,5} does not. Generalized to k-coloring: S(3) = 13 verified via one-hot encoding.
@@ -84,11 +85,12 @@ theorem vdw_number_2_3 : vanDerWaerdenNumber 8
 theorem vdw35_impossible : ¬hasKAPFreeColoring 4 35
 ```
 
-**Ramsey number** (`Ramsey.lean`) — R(3,3) = 6: K₅ has a triangle-free 2-coloring but K₆ does not. Generalized to asymmetric R(s,t): R(3,4) ≤ 9 verified.
+**Ramsey number** (`Ramsey.lean`) — R(3,3) = 6: K₅ has a triangle-free 2-coloring but K₆ does not. Generalized to asymmetric R(s,t): R(3,4) ≤ 9 and R(3,5) ≤ 14 verified. The R(3,5) proof breaks the vertex symmetry with satsuma's dominance steps (13 `dom` steps under a lexicographic order) before the CDCL refutation; plain CDCL does not refute the unbroken K₁₄ formula within 20 minutes.
 ```lean
 -- Ramsey namespace
 theorem ramsey_3_3 : ramseyNumber 5
 theorem ramsey9_34_impossible : ¬hasAsymRamseyFreeColoring 9 3 4
+theorem ramsey14_35_impossible : ¬hasAsymRamseyFreeColoring 14 3 5
 ```
 
 **Equitable coloring** (`EquitableColoring.lean`) — The equitable chromatic number of K_{3,3,1} is 5.
@@ -138,7 +140,7 @@ Requires [elan](https://github.com/leanprover/elan). The `lean-toolchain` file p
 
 ```
 lake build                 # build everything (~40 sec)
-lake build VeriPBKernel    # build kernel + tests only (~20 sec)
+lake build PBCatcherKernel    # build kernel + tests only (~20 sec)
 ```
 
 The checker modules are precompiled to native code (`precompileModules`, like `bv_decide`), so all certificate checks — including the 11 Paley graph independence numbers in `IndependentSet.lean` — run compiled rather than interpreted.
