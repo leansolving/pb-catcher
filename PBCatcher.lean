@@ -4,18 +4,18 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Authors: Stefan Szeider
 -/
 -- Kernel + Tests
-import VeriPBKernel
+import PBCatcherKernel
 
 -- Applications (trusted encodings)
-import VeriPB.Tactic.Sat.IndependentSet
-import VeriPB.Tactic.Sat.Langford
-import VeriPB.Tactic.Sat.Schur
-import VeriPB.Tactic.Sat.VanDerWaerden
-import VeriPB.Tactic.Sat.Ramsey
-import VeriPB.Tactic.Sat.EquitableColoring
-import VeriPB.Tactic.Sat.BinPacking
-import VeriPB.Tactic.Sat.VertexCover
-import VeriPB.Tactic.Sat.Chromatic
+import PBCatcher.IndependentSet
+import PBCatcher.Langford
+import PBCatcher.Schur
+import PBCatcher.VanDerWaerden
+import PBCatcher.Ramsey
+import PBCatcher.EquitableColoring
+import PBCatcher.BinPacking
+import PBCatcher.VertexCover
+import PBCatcher.Chromatic
 
 /-!
 # VeriPB: Verified Pseudo-Boolean Proof Checking

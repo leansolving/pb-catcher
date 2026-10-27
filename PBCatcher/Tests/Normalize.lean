@@ -3,13 +3,13 @@ Copyright (c) 2026 Stefan Szeider. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 Authors: Stefan Szeider
 -/
-import VeriPB.Tactic.Sat.FromVeriPB
+import PBCatcher.FromVeriPB
 
 /-!
 # Normalizer exactness test
 
-`VeriPB.normalizeConstr` is the verified normalizer (List-based, used by the
-soundness proofs). At runtime it is replaced by `VeriPB.normalizeArrays`
+`PBCatcher.normalizeConstr` is the verified normalizer (List-based, used by the
+soundness proofs). At runtime it is replaced by `PBCatcher.normalizeArrays`
 through `@[implemented_by]`, and the fast reflection checker calls
 `normalizeArrays` directly. The `nativeEqTrue` axioms produced by
 `veripb_reflect` assert facts about the *verified* definition, so the
@@ -25,24 +25,24 @@ coefficients and small degrees, which exercises the one-pass fast path, the
 blocked-pair fallback, and the interplay of cancellation and merging.
 -/
 
-namespace VeriPB.Tests.Normalize
+namespace PBCatcher.Tests.Normalize
 
 open Sat.PB
 
-/-! ### Verbatim reference copy of `VeriPB.normalizeConstr` -/
+/-! ### Verbatim reference copy of `PBCatcher.normalizeConstr` -/
 
 def normalizeConstrRef (c : Sat.PB.Constr) : Sat.PB.Constr :=
   let rec go (fuel : Nat) (terms : List Sat.PB.Term) (degree : Nat) : Sat.PB.Constr :=
     match fuel with
     | 0 => ⟨terms, degree⟩
     | n + 1 =>
-      match VeriPB.findZeroIdx terms with
+      match PBCatcher.findZeroIdx terms with
       | some idx =>
         let pre := terms.take idx
         let post := terms.drop (idx + 1)
         go n (pre ++ post) degree
       | none =>
-        match VeriPB.findValidCompPairIdx terms degree with
+        match PBCatcher.findValidCompPairIdx terms degree with
         | some (i, j) =>
           if hi : i < terms.length then
             if hj : j < terms.length then
@@ -63,7 +63,7 @@ def normalizeConstrRef (c : Sat.PB.Constr) : Sat.PB.Constr :=
             else ⟨terms, degree⟩
           else ⟨terms, degree⟩
         | none =>
-          match VeriPB.findLikeTermIdx terms with
+          match PBCatcher.findLikeTermIdx terms with
           | some (i, j) =>
             if hi : i < terms.length then
               if hj : j < terms.length then
@@ -79,7 +79,7 @@ def normalizeConstrRef (c : Sat.PB.Constr) : Sat.PB.Constr :=
               else ⟨terms, degree⟩
             else ⟨terms, degree⟩
           | none => ⟨terms, degree⟩
-  go (VeriPB.normFuel c.terms.length) c.terms c.degree
+  go (PBCatcher.normFuel c.terms.length) c.terms c.degree
 
 /-! ### Random constraints -/
 
@@ -112,8 +112,8 @@ def eqConstr (a b : Constr) : Bool :=
 def viaArrays (f : Array Nat → Array Nat → Nat → Array Nat × Array Nat × Nat)
     (c : Constr) : Constr :=
   let ts := c.terms.toArray
-  let (cs, ls, d) := f (ts.map (·.1)) (ts.map (VeriPB.litCode ·.2)) c.degree
-  ⟨(List.range cs.size).map fun i => (cs[i]!, VeriPB.litOfCode ls[i]!), d⟩
+  let (cs, ls, d) := f (ts.map (·.1)) (ts.map (PBCatcher.litCode ·.2)) c.degree
+  ⟨(List.range cs.size).map fun i => (cs[i]!, PBCatcher.litOfCode ls[i]!), d⟩
 
 def runTests (seed : UInt64) (count nv maxC maxD maxLen : Nat) : IO Unit := do
   let mut r : Rng := ⟨seed⟩
@@ -121,8 +121,8 @@ def runTests (seed : UInt64) (count nv maxC maxD maxLen : Nat) : IO Unit := do
     let (c, r') := randConstr r nv maxC maxD maxLen
     r := r'
     let expected := normalizeConstrRef c
-    let fast := viaArrays VeriPB.normalizeArrays c
-    let general := viaArrays VeriPB.normalizeArraysGeneral c
+    let fast := viaArrays PBCatcher.normalizeArrays c
+    let general := viaArrays PBCatcher.normalizeArraysGeneral c
     if !eqConstr expected fast then
       throw <| IO.userError
         s!"normalizeArrays mismatch on {repr c}: expected {repr expected}, got {repr fast}"
@@ -132,9 +132,9 @@ def runTests (seed : UInt64) (count nv maxC maxD maxLen : Nat) : IO Unit := do
           expected {repr expected}, got {repr general}"
   IO.println s!"normalizer exactness: seed {seed}, {count} random constraints OK"
 
-end VeriPB.Tests.Normalize
+end PBCatcher.Tests.Normalize
 
-open VeriPB.Tests.Normalize in
+open PBCatcher.Tests.Normalize in
 #eval show IO Unit from do
   runTests 1 5000 2 4 6 8
   runTests 2 5000 3 3 3 10

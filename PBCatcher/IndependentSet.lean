@@ -5,9 +5,9 @@ Authors: Stefan Szeider
 -/
 import Lean
 import Std
-import VeriPB.Tactic.Sat.PseudoBoolean
-import VeriPB.Tactic.Sat.FromVeriPB
-import VeriPB.Tactic.Sat.Reflect
+import PBCatcher.PseudoBoolean
+import PBCatcher.FromVeriPB
+import PBCatcher.Reflect
 
 /-!
 # Trusted Independent Set Encoding
@@ -373,7 +373,7 @@ elab "independent_set_decide " n:ident ppSpace gExpr:term:max
     let constrs := encode g target
     let auxName := name ++ `aux
     let (ctx, _ctx', pbProofConst) ←
-      VeriPB.fromVeriPBDirect constrs numVerts proofStr auxName
+      PBCatcher.fromVeriPBDirect constrs numVerts proofStr auxName
     -- Build the bridge proof
     let (finalType, finalProof) ←
       buildBridgeProof gVal targetVal ctx pbProofConst
@@ -402,9 +402,9 @@ elab "independent_set_reflect " n:ident ppSpace gExpr:term:max
     let numVarsExpr := mkApp (mkConst ``Graph.numVerts) gVal
     let proofStrExpr := mkStrLit proofStr
     -- checkProofBool (encode g target) numVerts proofStr
-    let checkExpr := mkApp5 (mkConst ``VeriPB.Reflect.checkProofBool)
+    let checkExpr := mkApp5 (mkConst ``PBCatcher.Reflect.checkProofBool)
       constrsExpr numVarsExpr
-      VeriPB.Reflect.emptyObjectiveExpr VeriPB.Reflect.emptyNamesExpr
+      PBCatcher.Reflect.emptyObjectiveExpr PBCatcher.Reflect.emptyNamesExpr
       proofStrExpr
     let hEqTrue ← match ← Lean.Meta.nativeEqTrue `independent_set_reflect checkExpr
         (axiomDeclRange? := (← getRef)) with
@@ -412,9 +412,9 @@ elab "independent_set_reflect " n:ident ppSpace gExpr:term:max
       | .notTrue => throwError "Reflection checker returned false for {name}"
     -- checkProof_sound → formulaUnsat (encode g target)
     let unsatProof := mkApp6
-      (mkConst ``VeriPB.Reflect.checkProof_sound)
+      (mkConst ``PBCatcher.Reflect.checkProof_sound)
       constrsExpr numVarsExpr
-      VeriPB.Reflect.emptyObjectiveExpr VeriPB.Reflect.emptyNamesExpr
+      PBCatcher.Reflect.emptyObjectiveExpr PBCatcher.Reflect.emptyNamesExpr
       proofStrExpr hEqTrue
     -- no_large_indset_of_unsat → ¬hasIndependentSet g target
     let finalProof := mkApp3 (mkConst ``no_large_indset_of_unsat)
@@ -441,7 +441,7 @@ value of a valuation is `−|{i | f i}|`. A VeriPB `conclusion BOUNDS −k : id
 def encodeOpt (g : Graph) : Array Constr := (mkEdgeConstrs g.edges).toArray
 
 /-- The normalized objective `Σ ¬x_i` of `min: -1 x_1 ... -1 x_n` (OPB names; internal variables `0..n-1`). -/
-def misObjective (g : Graph) : VeriPB.Reflect.Objective :=
+def misObjective (g : Graph) : PBCatcher.Reflect.Objective :=
   (List.range g.numVerts).map fun i => (1, Literal.neg i)
 
 /-- Its constant: `−n`. -/
@@ -460,19 +460,19 @@ theorem evalSum_negLits (f : Valuation) (n : Nat) :
 
 /-- The OPB value of `f` is minus the number of selected vertices. -/
 theorem misObjective_opbVal (g : Graph) (f : Valuation) :
-    VeriPB.Reflect.opbVal (misObjective g) (misOffset g) f =
+    PBCatcher.Reflect.opbVal (misObjective g) (misOffset g) f =
       -(countTrue f g.numVerts : Int) := by
   have h := evalSum_negLits f g.numVerts
-  simp only [VeriPB.Reflect.opbVal, VeriPB.Reflect.objVal, misObjective, misOffset]
+  simp only [PBCatcher.Reflect.opbVal, PBCatcher.Reflect.objVal, misObjective, misOffset]
   omega
 
 theorem encodeOpt_sat_indset (g : Graph) (f : Valuation)
-    (h : VeriPB.Reflect.FormulaSat (encodeOpt g) f) : isIndependentSet g f :=
+    (h : PBCatcher.Reflect.FormulaSat (encodeOpt g) f) : isIndependentSet g f :=
   mkEdgeConstrs_sat_implies_independent g.edges f fun c hc => h c (by
     simpa [encodeOpt] using hc)
 
 theorem indset_sat_encodeOpt (g : Graph) (f : Valuation)
-    (h : isIndependentSet g f) : VeriPB.Reflect.FormulaSat (encodeOpt g) f := by
+    (h : isIndependentSet g f) : PBCatcher.Reflect.FormulaSat (encodeOpt g) f := by
   intro c hc
   have hc' : c ∈ mkEdgeConstrs g.edges := by simpa [encodeOpt] using hc
   obtain ⟨u, v, he, hceq⟩ := mkEdgeConstrs_mem_edges g.edges c hc'
@@ -484,19 +484,19 @@ theorem indset_sat_encodeOpt (g : Graph) (f : Valuation)
 /-- Bridge: the bounds `−k ≤ −|S| ≤ −k` over the edge constraints give the
 independence number `k`. -/
 theorem independenceNumber_of_bounds (g : Graph) (k : Nat)
-    (h : VeriPB.Reflect.formulaBounds (encodeOpt g) (misObjective g) (misOffset g)
+    (h : PBCatcher.Reflect.formulaBounds (encodeOpt g) (misObjective g) (misOffset g)
       (some (-(k : Int))) (some (-(k : Int)))) :
     independenceNumber g k := by
   obtain ⟨hlb, hub⟩ := h
   refine ⟨?_, ?_⟩
   · obtain ⟨ρ, hρ, hval⟩ := hub
-    have hv : VeriPB.Reflect.opbVal (misObjective g) (misOffset g) ρ ≤ -(k : Int) :=
+    have hv : PBCatcher.Reflect.opbVal (misObjective g) (misOffset g) ρ ≤ -(k : Int) :=
       hval
     rw [misObjective_opbVal] at hv
     exact ⟨ρ, encodeOpt_sat_indset g ρ hρ, by omega⟩
   · intro ⟨f, hindep, hcount⟩
     have hv := hlb f (indset_sat_encodeOpt g f hindep)
-    have hv' : -(k : Int) ≤ VeriPB.Reflect.opbVal (misObjective g) (misOffset g) f :=
+    have hv' : -(k : Int) ≤ PBCatcher.Reflect.opbVal (misObjective g) (misOffset g) f :=
       hv
     rw [misObjective_opbVal] at hv'
     omega
@@ -519,8 +519,8 @@ elab "independent_set_opt_reflect " n:ident ppSpace gExpr:term:max
     let numVarsExpr := mkApp (mkConst ``Graph.numVerts) gVal
     let objExpr := mkApp (mkConst ``misObjective) gVal
     let offsetExpr := mkApp (mkConst ``misOffset) gVal
-    let claim := VeriPB.Reflect.Claim.bounds (some (-(k : Int))) (some (-(k : Int)))
-    let boundsProof ← VeriPB.Reflect.mkClaimProof `independent_set_opt_reflect
+    let claim := PBCatcher.Reflect.Claim.bounds (some (-(k : Int))) (some (-(k : Int)))
+    let boundsProof ← PBCatcher.Reflect.mkClaimProof `independent_set_opt_reflect
       constrsExpr numVarsExpr objExpr offsetExpr proofStr claim
       (ref? := some (← getRef))
     let finalProof := mkApp3 (mkConst ``independenceNumber_of_bounds) gVal kVal

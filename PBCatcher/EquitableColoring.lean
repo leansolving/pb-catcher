@@ -5,9 +5,9 @@ Authors: Stefan Szeider
 -/
 import Lean
 import Std
-import VeriPB.Tactic.Sat.PseudoBoolean
-import VeriPB.Tactic.Sat.FromVeriPB
-import VeriPB.Tactic.Sat.Reflect
+import PBCatcher.PseudoBoolean
+import PBCatcher.FromVeriPB
+import PBCatcher.Reflect
 
 /-!
 # Trusted Equitable Coloring Encoding
@@ -722,7 +722,7 @@ elab "eq_coloring_decide " nm:ident ppSpace
     let nvars := numVars g k
     let auxName := name ++ `aux
     let (ctx, _ctx', pbProofConst) ←
-      VeriPB.fromVeriPBDirect constrs nvars proofStr
+      PBCatcher.fromVeriPBDirect constrs nvars proofStr
         auxName
     let (finalType, finalProof) ←
       buildBridgeProof gVal kVal ctx pbProofConst
@@ -756,18 +756,18 @@ elab "eq_coloring_reflect " nm:ident ppSpace
       (mkConst ``numVars) gVal kVal
     let proofStrExpr := mkStrLit proofStr
     let checkExpr := mkApp5
-      (mkConst ``VeriPB.Reflect.checkProofBool)
+      (mkConst ``PBCatcher.Reflect.checkProofBool)
       constrsExpr numVarsExpr
-      VeriPB.Reflect.emptyObjectiveExpr VeriPB.Reflect.emptyNamesExpr
+      PBCatcher.Reflect.emptyObjectiveExpr PBCatcher.Reflect.emptyNamesExpr
       proofStrExpr
     let hEqTrue ← match ← Lean.Meta.nativeEqTrue `eq_coloring_reflect checkExpr
         (axiomDeclRange? := (← getRef)) with
       | .success prf => pure prf
       | .notTrue => throwError "Reflection checker returned false for {name}"
     let unsatProof := mkApp6
-      (mkConst ``VeriPB.Reflect.checkProof_sound)
+      (mkConst ``PBCatcher.Reflect.checkProof_sound)
       constrsExpr numVarsExpr
-      VeriPB.Reflect.emptyObjectiveExpr VeriPB.Reflect.emptyNamesExpr
+      PBCatcher.Reflect.emptyObjectiveExpr PBCatcher.Reflect.emptyNamesExpr
       proofStrExpr hEqTrue
     let finalProof := mkApp3
       (mkConst ``no_eq_coloring_of_unsat)

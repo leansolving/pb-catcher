@@ -3,7 +3,7 @@ Copyright (c) 2026 Stefan Szeider. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 Authors: Stefan Szeider
 -/
-import VeriPB.Tactic.Sat.Reflect
+import PBCatcher.Reflect
 
 /-!
 # Reflection-based Checker Tests
@@ -12,35 +12,35 @@ Test the reflection-based checker (`checkProofBool` + native evaluation)
 on a small OPB instance with VeriPB kernel proof.
 -/
 
-namespace VeriPB.Tests.Reflect
+namespace PBCatcher.Tests.Reflect
 
 -- PHP(2,1): 2 vars, 3 constraints. Uses rup + pol.
 veripb_reflect php21_reflect
-  "VeriPB/Tactic/Sat/Tests/data/php21.opb"
-  "VeriPB/Tactic/Sat/Tests/data/php21_kernel.pbp"
+  "PBCatcher/Tests/data/php21.opb"
+  "PBCatcher/Tests/data/php21_kernel.pbp"
 
 -- Weakening semantics (VeriPB-checked proof): variable on both sides of the
 -- operand, absent variable (no-op), coefficient above the degree (trivial),
 -- removal from a two-block sum.
 veripb_reflect weaken_cases_reflect
-  "VeriPB/Tactic/Sat/Tests/data/weaken_cases.opb"
-  "VeriPB/Tactic/Sat/Tests/data/weaken_cases_kernel.pbp"
+  "PBCatcher/Tests/data/weaken_cases.opb"
+  "PBCatcher/Tests/data/weaken_cases_kernel.pbp"
 
 -- rup semantics (VeriPB-checked proof): the target is normalized before
 -- negation (complementary pair in the target), and a target with degree
 -- above its coefficient sum (`rup >= 1`) is checked with the trivial
 -- negation.
 veripb_reflect rup_cases_reflect
-  "VeriPB/Tactic/Sat/Tests/data/rup_cases.opb"
-  "VeriPB/Tactic/Sat/Tests/data/rup_cases_kernel.pbp"
+  "PBCatcher/Tests/data/rup_cases.opb"
+  "PBCatcher/Tests/data/rup_cases_kernel.pbp"
 
 -- rup by unit propagation (accepted by VeriPB and CakePB): one weighted
 -- constraint forces three literals at once; hints in propagation order with
 -- an explicit `~` (once and twice). The rejected variants (reversed hints,
 -- no `~`, no hints) are in Tests/Differential.
 veripb_reflect rup_prop_reflect
-  "VeriPB/Tactic/Sat/Tests/data/rup_prop.opb"
-  "VeriPB/Tactic/Sat/Tests/data/rup_prop_kernel.pbp"
+  "PBCatcher/Tests/data/rup_prop.opb"
+  "PBCatcher/Tests/data/rup_prop_kernel.pbp"
 
 -- Input constraints and the pbc negation are normalized as in VeriPB and
 -- CakePB (all three accepted by both): a duplicated literal in an input
@@ -48,49 +48,49 @@ veripb_reflect rup_prop_reflect
 -- complementary pair in an input constraint, and a pbc target with a
 -- duplicated literal whose merged negation drives the subproof's rup.
 veripb_reflect dup_reflect
-  "VeriPB/Tactic/Sat/Tests/data/dup.opb"
-  "VeriPB/Tactic/Sat/Tests/data/dup_kernel.pbp"
+  "PBCatcher/Tests/data/dup.opb"
+  "PBCatcher/Tests/data/dup_kernel.pbp"
 
 veripb_reflect dup_pair_reflect
-  "VeriPB/Tactic/Sat/Tests/data/dup_pair.opb"
-  "VeriPB/Tactic/Sat/Tests/data/dup_pair_kernel.pbp"
+  "PBCatcher/Tests/data/dup_pair.opb"
+  "PBCatcher/Tests/data/dup_pair_kernel.pbp"
 
 veripb_reflect dup_pbc_reflect
-  "VeriPB/Tactic/Sat/Tests/data/dup_pbc.opb"
-  "VeriPB/Tactic/Sat/Tests/data/dup_pbc_kernel.pbp"
+  "PBCatcher/Tests/data/dup_pbc.opb"
+  "PBCatcher/Tests/data/dup_pbc_kernel.pbp"
 
 -- Red subproof test: pigeon-hole variant with redundance-based strengthening.
 -- Uses red/dom with explicit subproof (proofgoal #1 and proofgoal 1).
 -- Tests: red rule, substitution parsing, goal verification, auto-satisfaction.
 -- From VeriPB test suite: redundance_explicit_subproof.
 veripb_reflect red_subproof_reflect
-  "VeriPB/Tactic/Sat/Tests/data/red_subproof.opb"
-  "VeriPB/Tactic/Sat/Tests/data/red_subproof_kernel.pbp"
+  "PBCatcher/Tests/data/red_subproof.opb"
+  "PBCatcher/Tests/data/red_subproof_kernel.pbp"
 
 -- Red variable swap test: symmetric formula with x1↔x2 swap.
 -- Tests: auto-satisfied coverage (all constraints map to each other under swap).
 veripb_reflect red_swap_reflect
-  "VeriPB/Tactic/Sat/Tests/data/red_swap.opb"
-  "VeriPB/Tactic/Sat/Tests/data/red_swap_kernel.pbp"
+  "PBCatcher/Tests/data/red_swap.opb"
+  "PBCatcher/Tests/data/red_swap_kernel.pbp"
 
 -- Red with constant substitution (x1 → 0): all 4 constraints affected,
 -- 3 have trivially-contra goal negates, 2 need real subproofs.
 veripb_reflect red_const_reflect
-  "VeriPB/Tactic/Sat/Tests/data/red_const.opb"
-  "VeriPB/Tactic/Sat/Tests/data/red_const_kernel.pbp"
+  "PBCatcher/Tests/data/red_const.opb"
+  "PBCatcher/Tests/data/red_const_kernel.pbp"
 
 -- Red with negated literal substitution (x1 → ~x2, x2 → ~x1):
 -- complementary swap where all constraints auto-satisfy.
 veripb_reflect red_neglit_reflect
-  "VeriPB/Tactic/Sat/Tests/data/red_neglit.opb"
-  "VeriPB/Tactic/Sat/Tests/data/red_neglit_kernel.pbp"
+  "PBCatcher/Tests/data/red_neglit.opb"
+  "PBCatcher/Tests/data/red_neglit_kernel.pbp"
 
 -- Red with a variable swap and a `#1` goal closed by pol (formerly a `dom`
 -- proof with the same content; `dom` needs an order, which CakePB requires and
 -- the checker does not support yet, so `dom` is rejected).
 veripb_reflect red_basic_reflect
-  "VeriPB/Tactic/Sat/Tests/data/red_basic.opb"
-  "VeriPB/Tactic/Sat/Tests/data/red_basic_kernel.pbp"
+  "PBCatcher/Tests/data/red_basic.opb"
+  "PBCatcher/Tests/data/red_basic_kernel.pbp"
 
 -- PHP(3,2): pigeonhole principle with symmetry-breaking via red rule.
 -- Proof uses red to add x1≥1 (WLOG pigeon 1 goes to hole 1) with a cyclic
@@ -102,42 +102,42 @@ veripb_reflect php32_red_reflect
 
 -- UNSAT through `ia` from a contradictory source (VeriPB 3 test suite).
 veripb_reflect implication_contradiction_source_reflect
-  "VeriPB/Tactic/Sat/Tests/data/v3/implication_contradiction_source.opb"
-  "VeriPB/Tactic/Sat/Tests/data/v3/implication_contradiction_source_kernel.pbp"
+  "PBCatcher/Tests/data/v3/implication_contradiction_source.opb"
+  "PBCatcher/Tests/data/v3/implication_contradiction_source_kernel.pbp"
 
 -- pol cuts from the VeriPB 3 test suite: variable-form division (`k c`),
 -- normalized and variable-form mixed-integer rounding (`k n`, `k m`).
 veripb_reflect variable_form_division_reflect
-  "VeriPB/Tactic/Sat/Tests/data/v3/variable_form_division.opb"
-  "VeriPB/Tactic/Sat/Tests/data/v3/variable_form_division_kernel.pbp"
+  "PBCatcher/Tests/data/v3/variable_form_division.opb"
+  "PBCatcher/Tests/data/v3/variable_form_division_kernel.pbp"
 
 veripb_reflect normalized_mir_cut_reflect
-  "VeriPB/Tactic/Sat/Tests/data/v3/normalized_mir_cut.opb"
-  "VeriPB/Tactic/Sat/Tests/data/v3/normalized_mir_cut_kernel.pbp"
+  "PBCatcher/Tests/data/v3/normalized_mir_cut.opb"
+  "PBCatcher/Tests/data/v3/normalized_mir_cut_kernel.pbp"
 
 veripb_reflect variable_form_mir_cut_reflect
-  "VeriPB/Tactic/Sat/Tests/data/v3/variable_form_mir_cut.opb"
-  "VeriPB/Tactic/Sat/Tests/data/v3/variable_form_mir_cut_kernel.pbp"
+  "PBCatcher/Tests/data/v3/variable_form_mir_cut.opb"
+  "PBCatcher/Tests/data/v3/variable_form_mir_cut_kernel.pbp"
 
 -- A constraint and the negation of one of its cuts (`3 c`, `4 n`, `3 m`;
 -- Tests/data/polcut, accepted by VeriPB 3.0.1 and CakePB).
 veripb_reflect polcut_unsat_c_reflect
-  "VeriPB/Tactic/Sat/Tests/data/polcut/polcut_unsat_c.opb"
-  "VeriPB/Tactic/Sat/Tests/data/polcut/polcut_unsat_c.pbp"
+  "PBCatcher/Tests/data/polcut/polcut_unsat_c.opb"
+  "PBCatcher/Tests/data/polcut/polcut_unsat_c.pbp"
 
 veripb_reflect polcut_unsat_n_reflect
-  "VeriPB/Tactic/Sat/Tests/data/polcut/polcut_unsat_n.opb"
-  "VeriPB/Tactic/Sat/Tests/data/polcut/polcut_unsat_n.pbp"
+  "PBCatcher/Tests/data/polcut/polcut_unsat_n.opb"
+  "PBCatcher/Tests/data/polcut/polcut_unsat_n.pbp"
 
 veripb_reflect polcut_unsat_m_reflect
-  "VeriPB/Tactic/Sat/Tests/data/polcut/polcut_unsat_m.opb"
-  "VeriPB/Tactic/Sat/Tests/data/polcut/polcut_unsat_m.pbp"
+  "PBCatcher/Tests/data/polcut/polcut_unsat_m.opb"
+  "PBCatcher/Tests/data/polcut/polcut_unsat_m.pbp"
 
 -- The same proof on the instance with an objective line (`min: +2 x1 -1 x2`):
 -- `veripb_reflect` passes the parsed objective to the checker.
 veripb_reflect php21_obj_reflect
-  "VeriPB/Tactic/Sat/Tests/data/php21_obj.opb"
-  "VeriPB/Tactic/Sat/Tests/data/php21_kernel.pbp"
+  "PBCatcher/Tests/data/php21_obj.opb"
+  "PBCatcher/Tests/data/php21_kernel.pbp"
 
 /-! ## Conclusions SAT and BOUNDS
 
@@ -151,267 +151,267 @@ Tests/Differential (verified and fast checkers) and below (the command). -/
 
 -- Minimum vertex cover of the 6-cycle with two chords: optimum 3.
 veripb_reflect vc6_bounds_reflect
-  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
-  "VeriPB/Tactic/Sat/Tests/data/vc6_linear_kernel.pbp"
+  "PBCatcher/Tests/data/vc6.opb"
+  "PBCatcher/Tests/data/vc6_linear_kernel.pbp"
 
 -- Optimum 3, attained: `(∃ v, FormulaSat F v ∧ objVal obj v + 0 = 3) ∧
 -- ∀ v, FormulaSat F v → 3 ≤ objVal obj v + 0`.
-open VeriPB.Reflect in
+open PBCatcher.Reflect in
 example := formulaBounds_optimum vc6_bounds_reflect
 
-example := (vc6_bounds_reflect : VeriPB.Reflect.formulaBounds _ _ 0 (some 3) (some 3))
+example := (vc6_bounds_reflect : PBCatcher.Reflect.formulaBounds _ _ 0 (some 3) (some 3))
 
 -- The same proof with `soli ... : 3`, with the upper bound from the logged
 -- solution, without an upper bound, and with an upper bound above the best.
 veripb_reflect vc6_solval_reflect
-  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/vc6_solval_ok.pbp"
+  "PBCatcher/Tests/data/vc6.opb"
+  "PBCatcher/Tests/data/concl/vc6_solval_ok.pbp"
 
 veripb_reflect vc6_bounds_nolits_reflect
-  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/vc6_bounds_nolits.pbp"
+  "PBCatcher/Tests/data/vc6.opb"
+  "PBCatcher/Tests/data/concl/vc6_bounds_nolits.pbp"
 
 veripb_reflect vc6_bounds_noub_reflect
-  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/vc6_bounds_noub.pbp"
+  "PBCatcher/Tests/data/vc6.opb"
+  "PBCatcher/Tests/data/concl/vc6_bounds_noub.pbp"
 
 veripb_reflect vc6_bounds_ub_above_reflect
-  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/vc6_bounds_ub_above.pbp"
+  "PBCatcher/Tests/data/vc6.opb"
+  "PBCatcher/Tests/data/concl/vc6_bounds_ub_above.pbp"
 
 -- `conclusion UNSAT` after a logged solution of value 3: rejected (VeriPB
 -- and CakePB too), and `BOUNDS INF` on the same database likewise.
 /-- error: VeriPB reflection checker rejected the proof -/
 #guard_msgs in
 veripb_reflect vc6_fakeunsat_bad
-  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
-  "VeriPB/Tactic/Sat/Tests/data/vc6_fakeunsat_kernel.pbp"
+  "PBCatcher/Tests/data/vc6.opb"
+  "PBCatcher/Tests/data/vc6_fakeunsat_kernel.pbp"
 
 /-- error: VeriPB reflection checker rejected the proof -/
 #guard_msgs in
 veripb_reflect vc6_inf_after_soli_bad
-  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/vc6_inf_after_soli.pbp"
+  "PBCatcher/Tests/data/vc6.opb"
+  "PBCatcher/Tests/data/concl/vc6_inf_after_soli.pbp"
 
 -- SAT with a solution, on an instance with an objective.
 veripb_reflect vc6_sat_reflect
-  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/vc6_sat_obj.pbp"
+  "PBCatcher/Tests/data/vc6.opb"
+  "PBCatcher/Tests/data/concl/vc6_sat_obj.pbp"
 
 -- Objective with offset: min: -2 x1 -2 x2 -2 x3 (terms 2 ~x1 + 2 ~x2 + 2 ~x3,
 -- offset -6), optimum -2; `soli x1 ~x2 ~x3 : -2`.
 veripb_reflect off3_reflect
-  "VeriPB/Tactic/Sat/Tests/data/concl/off3.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/off3_ok.pbp"
+  "PBCatcher/Tests/data/concl/off3.opb"
+  "PBCatcher/Tests/data/concl/off3_ok.pbp"
 
-example := (off3_reflect : VeriPB.Reflect.formulaBounds _ _ (-6) (some (-2)) (some (-2)))
+example := (off3_reflect : PBCatcher.Reflect.formulaBounds _ _ (-6) (some (-2)) (some (-2)))
 
 -- Unsatisfiable instance with an objective: `BOUNDS INF : id INF` and a
 -- (vacuous) finite lower bound.
 veripb_reflect php21_obj_inf_reflect
-  "VeriPB/Tactic/Sat/Tests/data/php21_obj.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/php21_obj_inf.pbp"
+  "PBCatcher/Tests/data/php21_obj.opb"
+  "PBCatcher/Tests/data/concl/php21_obj_inf.pbp"
 
 veripb_reflect php21_obj_lb_reflect
-  "VeriPB/Tactic/Sat/Tests/data/php21_obj.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/php21_obj_lb.pbp"
+  "PBCatcher/Tests/data/php21_obj.opb"
+  "PBCatcher/Tests/data/concl/php21_obj_lb.pbp"
 
 -- SAT: a listed solution, and a logged solution.
 veripb_reflect sat3_hint_reflect
-  "VeriPB/Tactic/Sat/Tests/data/concl/sat3.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/sat3_hint.pbp"
+  "PBCatcher/Tests/data/concl/sat3.opb"
+  "PBCatcher/Tests/data/concl/sat3_hint.pbp"
 
 veripb_reflect sat3_sol_reflect
-  "VeriPB/Tactic/Sat/Tests/data/concl/sat3.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/sat3_sol.pbp"
+  "PBCatcher/Tests/data/concl/sat3.opb"
+  "PBCatcher/Tests/data/concl/sat3_sol.pbp"
 
 -- `conclusion SAT : ;` is the all-false assignment (as in CakePB), here a
 -- solution of `~x1 + ~x2 >= 1`.
 veripb_reflect allfalse_empty_hint_reflect
-  "VeriPB/Tactic/Sat/Tests/data/concl/allfalse.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/allfalse_empty_hint.pbp"
+  "PBCatcher/Tests/data/concl/allfalse.opb"
+  "PBCatcher/Tests/data/concl/allfalse_empty_hint.pbp"
 
-example := (allfalse_empty_hint_reflect : VeriPB.Reflect.formulaSatisfiable _)
+example := (allfalse_empty_hint_reflect : PBCatcher.Reflect.formulaSatisfiable _)
 
 -- VeriPB 3 test suite: BOUNDS INF, SAT after sol, bounds with offsets and a
 -- max: objective (the bounds refer to its negation).
 veripb_reflect conclusion_BOUNDS_infeasible_reflect
-  "VeriPB/Tactic/Sat/Tests/data/v3/conclusion_BOUNDS_infeasible.opb"
-  "VeriPB/Tactic/Sat/Tests/data/v3/conclusion_BOUNDS_infeasible_kernel.pbp"
+  "PBCatcher/Tests/data/v3/conclusion_BOUNDS_infeasible.opb"
+  "PBCatcher/Tests/data/v3/conclusion_BOUNDS_infeasible_kernel.pbp"
 
 example := (conclusion_BOUNDS_infeasible_reflect :
-  VeriPB.Reflect.formulaBounds _ _ _ none none)
+  PBCatcher.Reflect.formulaBounds _ _ _ none none)
 
 veripb_reflect conclusion_SAT_sol_in_proof_reflect
-  "VeriPB/Tactic/Sat/Tests/data/v3/conclusion_SAT_sol_in_proof.opb"
-  "VeriPB/Tactic/Sat/Tests/data/v3/conclusion_SAT_sol_in_proof_kernel.pbp"
+  "PBCatcher/Tests/data/v3/conclusion_SAT_sol_in_proof.opb"
+  "PBCatcher/Tests/data/v3/conclusion_SAT_sol_in_proof_kernel.pbp"
 
 veripb_reflect solution_logging_optional_value_reflect
-  "VeriPB/Tactic/Sat/Tests/data/v3/solution_logging_optional_value.opb"
-  "VeriPB/Tactic/Sat/Tests/data/v3/solution_logging_optional_value_kernel.pbp"
+  "PBCatcher/Tests/data/v3/solution_logging_optional_value.opb"
+  "PBCatcher/Tests/data/v3/solution_logging_optional_value_kernel.pbp"
 
 veripb_reflect solution_logging_max_objective_reflect
-  "VeriPB/Tactic/Sat/Tests/data/v3/solution_logging_max_objective.opb"
-  "VeriPB/Tactic/Sat/Tests/data/v3/solution_logging_max_objective_kernel.pbp"
+  "PBCatcher/Tests/data/v3/solution_logging_max_objective.opb"
+  "PBCatcher/Tests/data/v3/solution_logging_max_objective_kernel.pbp"
 
 -- `max: 2 x1 + 2 x2 + 2 x3` is `2 ~x1 + 2 ~x2 + 2 ~x3 - 6` in min form:
 -- the bounds -2, -2 say that the maximum of the original objective is 2.
 example := (solution_logging_max_objective_reflect :
-  VeriPB.Reflect.formulaBounds _ _ (-6) (some (-2)) (some (-2)))
+  PBCatcher.Reflect.formulaBounds _ _ (-6) (some (-2)) (some (-2)))
 
 -- `obji -2` asserts the value -2 without a solution: it gives the lower
 -- bound (the asserted value lowers the threshold and its constraint is
 -- used in the derivation); the upper bound needs the conclusion solution.
 veripb_reflect objective_improving_reflect
-  "VeriPB/Tactic/Sat/Tests/data/v3/objective_improving.opb"
-  "VeriPB/Tactic/Sat/Tests/data/v3/objective_improving_kernel.pbp"
+  "PBCatcher/Tests/data/v3/objective_improving.opb"
+  "PBCatcher/Tests/data/v3/objective_improving_kernel.pbp"
 
 example := (objective_improving_reflect :
-  VeriPB.Reflect.formulaBounds _ _ (-6) (some (-2)) (some (-2)))
+  PBCatcher.Reflect.formulaBounds _ _ (-6) (some (-2)) (some (-2)))
 
 -- `obji` without a witnessed solution: lower bound only.
 veripb_reflect obji3_lb_reflect
-  "VeriPB/Tactic/Sat/Tests/data/concl/obji3.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/obji3_lb.pbp"
+  "PBCatcher/Tests/data/concl/obji3.opb"
+  "PBCatcher/Tests/data/concl/obji3_lb.pbp"
 
 example := (obji3_lb_reflect :
-  VeriPB.Reflect.formulaBounds _ _ (-6) (some (-2)) none)
+  PBCatcher.Reflect.formulaBounds _ _ (-6) (some (-2)) none)
 
 -- Rejected after `obji` (VeriPB and CakePB too): a finite upper bound
 -- without a solution, UNSAT, SAT without a solution, INF lower bound.
 /-- error: VeriPB reflection checker rejected the proof -/
 #guard_msgs in
 veripb_reflect obji3_ub_nowit_bad
-  "VeriPB/Tactic/Sat/Tests/data/concl/obji3.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/obji3_ub_nowit.pbp"
+  "PBCatcher/Tests/data/concl/obji3.opb"
+  "PBCatcher/Tests/data/concl/obji3_ub_nowit.pbp"
 
 /-- error: VeriPB reflection checker rejected the proof -/
 #guard_msgs in
 veripb_reflect obji3_unsat_bad
-  "VeriPB/Tactic/Sat/Tests/data/concl/obji3.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/obji3_unsat.pbp"
+  "PBCatcher/Tests/data/concl/obji3.opb"
+  "PBCatcher/Tests/data/concl/obji3_unsat.pbp"
 
 /-- error: VeriPB reflection checker rejected the proof -/
 #guard_msgs in
 veripb_reflect obji3_sat_nowit_bad
-  "VeriPB/Tactic/Sat/Tests/data/concl/obji3.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/obji3_sat_nowit.pbp"
+  "PBCatcher/Tests/data/concl/obji3.opb"
+  "PBCatcher/Tests/data/concl/obji3_sat_nowit.pbp"
 
 /-- error: VeriPB reflection checker rejected the proof -/
 #guard_msgs in
 veripb_reflect obji3_lb_inf_bad
-  "VeriPB/Tactic/Sat/Tests/data/concl/obji3.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/obji3_lb_inf.pbp"
+  "PBCatcher/Tests/data/concl/obji3.opb"
+  "PBCatcher/Tests/data/concl/obji3_lb_inf.pbp"
 
 -- `obju new`/`diff` with core-only subproofs and `eobj`: the bounds are
 -- about the original objective (`conclusion_BOUNDS_objective_change` ends
 -- with the objective `1 ~x4 2` and a witness evaluated on the original).
 veripb_reflect objective_update_subproof_reflect
-  "VeriPB/Tactic/Sat/Tests/data/v3/objective_update_subproof.opb"
-  "VeriPB/Tactic/Sat/Tests/data/v3/objective_update_subproof_kernel.pbp"
+  "PBCatcher/Tests/data/v3/objective_update_subproof.opb"
+  "PBCatcher/Tests/data/v3/objective_update_subproof_kernel.pbp"
 
 veripb_reflect objective_update_diff_check_reflect
-  "VeriPB/Tactic/Sat/Tests/data/v3/objective_update_diff_check.opb"
-  "VeriPB/Tactic/Sat/Tests/data/v3/objective_update_diff_check_kernel.pbp"
+  "PBCatcher/Tests/data/v3/objective_update_diff_check.opb"
+  "PBCatcher/Tests/data/v3/objective_update_diff_check_kernel.pbp"
 
 veripb_reflect objective_update_diff_reflect
-  "VeriPB/Tactic/Sat/Tests/data/v3/objective_update_diff.opb"
-  "VeriPB/Tactic/Sat/Tests/data/v3/objective_update_diff_kernel.pbp"
+  "PBCatcher/Tests/data/v3/objective_update_diff.opb"
+  "PBCatcher/Tests/data/v3/objective_update_diff_kernel.pbp"
 
 veripb_reflect conclusion_BOUNDS_objective_change_reflect
-  "VeriPB/Tactic/Sat/Tests/data/v3/conclusion_BOUNDS_objective_change.opb"
-  "VeriPB/Tactic/Sat/Tests/data/v3/conclusion_BOUNDS_objective_change_kernel.pbp"
+  "PBCatcher/Tests/data/v3/conclusion_BOUNDS_objective_change.opb"
+  "PBCatcher/Tests/data/v3/conclusion_BOUNDS_objective_change_kernel.pbp"
 
 example := (conclusion_BOUNDS_objective_change_reflect :
-  VeriPB.Reflect.formulaBounds _ _ 0 (some 2) (some 2))
+  PBCatcher.Reflect.formulaBounds _ _ 0 (some 2) (some 2))
 
 -- Rejected (CakePB too): an `obju` goal without proofgoal that is not
 -- trivial, a wrong new objective, an `eobj` that does not match.
 /-- error: VeriPB reflection checker rejected the proof -/
 #guard_msgs in
 veripb_reflect ou3_obju_missing2_bad
-  "VeriPB/Tactic/Sat/Tests/data/concl/ou3.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/ou3_obju_missing2.pbp"
+  "PBCatcher/Tests/data/concl/ou3.opb"
+  "PBCatcher/Tests/data/concl/ou3_obju_missing2.pbp"
 
 /-- error: VeriPB reflection checker rejected the proof -/
 #guard_msgs in
 veripb_reflect ou3_obju_wrongobj_bad
-  "VeriPB/Tactic/Sat/Tests/data/concl/ou3.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/ou3_obju_wrongobj.pbp"
+  "PBCatcher/Tests/data/concl/ou3.opb"
+  "PBCatcher/Tests/data/concl/ou3_obju_wrongobj.pbp"
 
 /-- error: VeriPB reflection checker rejected the proof -/
 #guard_msgs in
 veripb_reflect ou3_eobj_bad
-  "VeriPB/Tactic/Sat/Tests/data/concl/ou3.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/ou3_eobj_bad.pbp"
+  "PBCatcher/Tests/data/concl/ou3.opb"
+  "PBCatcher/Tests/data/concl/ou3_eobj_bad.pbp"
 
 -- Output claims are accepted as footers under CakePB's bound-side
 -- conditions; the theorem is the conclusion's and the info message says
 -- that the claim about the output formula is not certified.
 /--
-info: Registered VeriPB.Tests.Reflect.optimization_output_reflect : formulaBounds, 2 ≤ objective ≤ 2 [output claim EQUIOPTIMAL FILE not certified] (checked via reflection)
+info: Registered PBCatcher.Tests.Reflect.optimization_output_reflect : formulaBounds, 2 ≤ objective ≤ 2 [output claim EQUIOPTIMAL FILE not certified] (checked via reflection)
 -/
 #guard_msgs in
 veripb_reflect optimization_output_reflect
-  "VeriPB/Tactic/Sat/Tests/data/v3/optimization_output_opposing_lits_objective.opb"
-  "VeriPB/Tactic/Sat/Tests/data/v3/optimization_output_opposing_lits_objective_kernel.pbp"
+  "PBCatcher/Tests/data/v3/optimization_output_opposing_lits_objective.opb"
+  "PBCatcher/Tests/data/v3/optimization_output_opposing_lits_objective_kernel.pbp"
 
 veripb_reflect vc6_out_equiopt_reflect
-  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/vc6_out_equiopt.pbp"
+  "PBCatcher/Tests/data/vc6.opb"
+  "PBCatcher/Tests/data/concl/vc6_out_equiopt.pbp"
 
 -- The UNSAT path (`checkProofBool`) accepts the same footers.
 /--
-info: Registered VeriPB.Tests.Reflect.php21_out_derivable_reflect : formulaUnsat [output claim DERIVABLE FILE not certified] (checked via reflection)
+info: Registered PBCatcher.Tests.Reflect.php21_out_derivable_reflect : formulaUnsat [output claim DERIVABLE FILE not certified] (checked via reflection)
 -/
 #guard_msgs in
 veripb_reflect php21_out_derivable_reflect
-  "VeriPB/Tactic/Sat/Tests/data/php21.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/php21_out_derivable.pbp"
+  "PBCatcher/Tests/data/php21.opb"
+  "PBCatcher/Tests/data/concl/php21_out_derivable.pbp"
 
 veripb_reflect sat3_out_equisat_sol_reflect
-  "VeriPB/Tactic/Sat/Tests/data/concl/sat3.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/sat3_out_equisat_sol.pbp"
+  "PBCatcher/Tests/data/concl/sat3.opb"
+  "PBCatcher/Tests/data/concl/sat3_out_equisat_sol.pbp"
 
 -- EQUIOPTIMAL after a plain `delc` (checked deletion off) and `IMPLICIT`
 -- outputs are rejected.
 /-- error: VeriPB reflection checker rejected the proof -/
 #guard_msgs in
 veripb_reflect vc6_out_equiopt_delc_bad
-  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/vc6_out_equiopt_delc.pbp"
+  "PBCatcher/Tests/data/vc6.opb"
+  "PBCatcher/Tests/data/concl/vc6_out_equiopt_delc.pbp"
 
 /-- error: VeriPB reflection checker rejected the proof -/
 #guard_msgs in
 veripb_reflect vc6_out_implicit_bad
-  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/vc6_out_implicit.pbp"
+  "PBCatcher/Tests/data/vc6.opb"
+  "PBCatcher/Tests/data/concl/vc6_out_implicit.pbp"
 
 -- Inside the core-only `obju` subproof every derived constraint is core:
 -- `deld` is rejected (VeriPB and CakePB too).
 /-- error: VeriPB reflection checker rejected the proof -/
 #guard_msgs in
 veripb_reflect ou3_obju_deld_bad
-  "VeriPB/Tactic/Sat/Tests/data/concl/ou3.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/ou3_obju_deld.pbp"
+  "PBCatcher/Tests/data/concl/ou3.opb"
+  "PBCatcher/Tests/data/concl/ou3_obju_deld.pbp"
 
 -- After a plain `delc` (checked deletion off) logged solutions are no
 -- witnesses (VeriPB and CakePB too): the conclusion needs the solution.
 veripb_reflect vc6_ub_after_delc_wit_reflect
-  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/vc6_ub_after_delc_wit.pbp"
+  "PBCatcher/Tests/data/vc6.opb"
+  "PBCatcher/Tests/data/concl/vc6_ub_after_delc_wit.pbp"
 
 /-- error: VeriPB reflection checker rejected the proof -/
 #guard_msgs in
 veripb_reflect vc6_ub_after_delc_bad
-  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/vc6_ub_after_delc.pbp"
+  "PBCatcher/Tests/data/vc6.opb"
+  "PBCatcher/Tests/data/concl/vc6_ub_after_delc.pbp"
 
 /-- error: VeriPB reflection checker rejected the proof -/
 #guard_msgs in
 veripb_reflect sat3_sol_after_delc_bad
-  "VeriPB/Tactic/Sat/Tests/data/concl/sat3.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/sat3_sol_after_delc.pbp"
+  "PBCatcher/Tests/data/concl/sat3.opb"
+  "PBCatcher/Tests/data/concl/sat3_sol_after_delc.pbp"
 
 -- Rejected by the command (and by VeriPB and CakePB): wrong lower bound,
 -- wrong upper bound, wrong solution value, finite upper bound without a
@@ -419,38 +419,38 @@ veripb_reflect sat3_sol_after_delc_bad
 /-- error: VeriPB reflection checker rejected the proof -/
 #guard_msgs in
 veripb_reflect vc6_lb_too_high_bad
-  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/vc6_lb_too_high.pbp"
+  "PBCatcher/Tests/data/vc6.opb"
+  "PBCatcher/Tests/data/concl/vc6_lb_too_high.pbp"
 
 /-- error: VeriPB reflection checker rejected the proof -/
 #guard_msgs in
 veripb_reflect vc6_ub_low_bad
-  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/vc6_ub_low.pbp"
+  "PBCatcher/Tests/data/vc6.opb"
+  "PBCatcher/Tests/data/concl/vc6_ub_low.pbp"
 
 /-- error: VeriPB reflection checker rejected the proof -/
 #guard_msgs in
 veripb_reflect vc6_solval_bad
-  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/vc6_solval_bad.pbp"
+  "PBCatcher/Tests/data/vc6.opb"
+  "PBCatcher/Tests/data/concl/vc6_solval_bad.pbp"
 
 /-- error: VeriPB reflection checker rejected the proof -/
 #guard_msgs in
 veripb_reflect off3_solval_bad
-  "VeriPB/Tactic/Sat/Tests/data/concl/off3.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/off3_solval_nooffset.pbp"
+  "PBCatcher/Tests/data/concl/off3.opb"
+  "PBCatcher/Tests/data/concl/off3_solval_nooffset.pbp"
 
 /-- error: VeriPB reflection checker rejected the proof -/
 #guard_msgs in
 veripb_reflect php21_obj_lb_ub_bad
-  "VeriPB/Tactic/Sat/Tests/data/php21_obj.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/php21_obj_lb_ub.pbp"
+  "PBCatcher/Tests/data/php21_obj.opb"
+  "PBCatcher/Tests/data/concl/php21_obj_lb_ub.pbp"
 
 /-- error: VeriPB reflection checker rejected the proof -/
 #guard_msgs in
 veripb_reflect sat3_bad
-  "VeriPB/Tactic/Sat/Tests/data/concl/sat3.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/sat3_bad.pbp"
+  "PBCatcher/Tests/data/concl/sat3.opb"
+  "PBCatcher/Tests/data/concl/sat3_bad.pbp"
 
 -- `conclusion SAT : ;` and an upper bound `ub : ;` read as the all-false
 -- assignment, which is no solution here (CakePB rejects too; VeriPB
@@ -459,46 +459,46 @@ veripb_reflect sat3_bad
 /-- error: VeriPB reflection checker rejected the proof -/
 #guard_msgs in
 veripb_reflect sat3_empty_hint_bad
-  "VeriPB/Tactic/Sat/Tests/data/concl/sat3.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/sat3_empty_hint.pbp"
+  "PBCatcher/Tests/data/concl/sat3.opb"
+  "PBCatcher/Tests/data/concl/sat3_empty_hint.pbp"
 
 /-- error: VeriPB reflection checker rejected the proof -/
 #guard_msgs in
 veripb_reflect vc6_ub_empty_hint_bad
-  "VeriPB/Tactic/Sat/Tests/data/vc6.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/vc6_ub_empty_hint.pbp"
+  "PBCatcher/Tests/data/vc6.opb"
+  "PBCatcher/Tests/data/concl/vc6_ub_empty_hint.pbp"
 
 -- Footer placement: the conclusion must be the last step, directly after
 -- `output NONE`, and the only one (rejected by VeriPB and CakePB too).
 /-- error: VeriPB reflection checker rejected the proof -/
 #guard_msgs in
 veripb_reflect php21_concl_before_output_bad
-  "VeriPB/Tactic/Sat/Tests/data/php21.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/php21_concl_before_output.pbp"
+  "PBCatcher/Tests/data/php21.opb"
+  "PBCatcher/Tests/data/concl/php21_concl_before_output.pbp"
 
 /-- error: VeriPB reflection checker rejected the proof -/
 #guard_msgs in
 veripb_reflect php21_concl_no_output_bad
-  "VeriPB/Tactic/Sat/Tests/data/php21.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/php21_concl_no_output.pbp"
+  "PBCatcher/Tests/data/php21.opb"
+  "PBCatcher/Tests/data/concl/php21_concl_no_output.pbp"
 
 /-- error: VeriPB reflection checker rejected the proof -/
 #guard_msgs in
 veripb_reflect php21_concl_twice_bad
-  "VeriPB/Tactic/Sat/Tests/data/php21.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/php21_concl_twice.pbp"
+  "PBCatcher/Tests/data/php21.opb"
+  "PBCatcher/Tests/data/concl/php21_concl_twice.pbp"
 
 /-- error: VeriPB reflection checker rejected the proof -/
 #guard_msgs in
 veripb_reflect php21_concl_not_last_bad
-  "VeriPB/Tactic/Sat/Tests/data/php21.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/php21_concl_not_last.pbp"
+  "PBCatcher/Tests/data/php21.opb"
+  "PBCatcher/Tests/data/concl/php21_concl_not_last.pbp"
 
 /-- error: VeriPB reflection checker rejected the proof -/
 #guard_msgs in
 veripb_reflect sat3_concl_before_output_bad
-  "VeriPB/Tactic/Sat/Tests/data/concl/sat3.opb"
-  "VeriPB/Tactic/Sat/Tests/data/concl/sat3_concl_before_output.pbp"
+  "PBCatcher/Tests/data/concl/sat3.opb"
+  "PBCatcher/Tests/data/concl/sat3_concl_before_output.pbp"
 
 /-! ## Solution logging (`soli`) and the optimization invariant
 
@@ -506,18 +506,18 @@ The checker runs step by step, the verified `execStepsFuel` and the fast
 `Fast.execFStepsFuel` side by side; `runBoth` returns the index of the first
 rejected step (it must be the same for both) or the final best value. -/
 
-open VeriPB.Reflect in
+open PBCatcher.Reflect in
 /-- Run both step loops on an OPB file (with its objective) and a kernel
 proof. Returns `.error k` if step `k` is rejected, otherwise the verified
 final state; throws if the two checkers disagree. -/
 def runBoth (opbPath proofPath : String) : IO (Except Nat BoolCheckState) := do
   let opbStr ← IO.FS.readFile opbPath
   let proofStr ← IO.FS.readFile proofPath
-  let inst ← match VeriPB.parseOPBNamed opbStr with
+  let inst ← match PBCatcher.parseOPBNamed opbStr with
     | .ok r => pure r
     | .error e => throw (IO.userError s!"OPB parse error: {e}")
-  let proof ← match VeriPB.parseVeriPBProofWith
-      (VeriPB.VarTable.ofList inst.names inst.numVars) proofStr with
+  let proof ← match PBCatcher.parseVeriPBProofWith
+      (PBCatcher.VarTable.ofList inst.names inst.numVars) proofStr with
     | .ok p => pure p
     | .error e => throw (IO.userError s!"proof parse error: {e}")
   let obj : Objective := match inst.objective with
@@ -545,9 +545,9 @@ def runBoth (opbPath proofPath : String) : IO (Except Nat BoolCheckState) := do
     throw (IO.userError s!"{proofPath}: conclusion differs")
   return .ok st
 
-open VeriPB.Reflect in
+open PBCatcher.Reflect in
 #eval show IO Unit from do
-  let d := "VeriPB/Tactic/Sat/Tests/data/"
+  let d := "PBCatcher/Tests/data/"
   -- Minimum vertex cover of a 6-cycle with two chords (optimum 3), RoundingSat
   -- linear search, elaborated by VeriPB: f, rup, soli, pol, deld, output,
   -- conclusion BOUNDS. Every step is accepted; the logged solution has
@@ -572,7 +572,7 @@ open VeriPB.Reflect in
   match ← runBoth (d ++ "vc6.opb") (d ++ "vc6_fakeunsat_kernel.pbp") with
   | .ok s =>
     let proofStr ← IO.FS.readFile (d ++ "vc6_fakeunsat_kernel.pbp")
-    let steps := match VeriPB.parseVeriPBProof proofStr with
+    let steps := match PBCatcher.parseVeriPBProof proofStr with
       | .ok p => p.steps
       | .error _ => #[]
     if hasUnsatConclusion steps s then
@@ -624,4 +624,4 @@ open VeriPB.Reflect in
   | .error k => throw (IO.userError s!"vc6_redok: step {k} rejected")
   IO.println "solution logging tests OK"
 
-end VeriPB.Tests.Reflect
+end PBCatcher.Tests.Reflect

@@ -5,9 +5,9 @@ Authors: Stefan Szeider
 -/
 import Lean
 import Std
-import VeriPB.Tactic.Sat.PseudoBoolean
-import VeriPB.Tactic.Sat.FromVeriPB
-import VeriPB.Tactic.Sat.Reflect
+import PBCatcher.PseudoBoolean
+import PBCatcher.FromVeriPB
+import PBCatcher.Reflect
 
 /-!
 # Trusted Schur Number Encoding
@@ -277,7 +277,7 @@ elab "schur_decide " nm:ident ppSpace nTerm:num : command => do
     let constrs := encode n
     let auxName := name ++ `aux
     let (ctx, _ctx', pbProofConst) ←
-      VeriPB.fromVeriPBDirect constrs (n + 1) proofStr auxName
+      PBCatcher.fromVeriPBDirect constrs (n + 1) proofStr auxName
     let (finalType, finalProof) ←
       buildBridgeProof nExpr ctx pbProofConst
     addDecl <| Declaration.thmDecl {
@@ -300,18 +300,18 @@ elab "schur_reflect " nm:ident ppSpace nTerm:num
     let proofStr ← IO.FS.readFile (System.FilePath.mk proofPath)
     let constrsExpr := mkApp (mkConst ``encode) nExpr
     let proofStrExpr := mkStrLit proofStr
-    let checkExpr := mkApp5 (mkConst ``VeriPB.Reflect.checkProofBool)
+    let checkExpr := mkApp5 (mkConst ``PBCatcher.Reflect.checkProofBool)
       constrsExpr numVarsExpr
-      VeriPB.Reflect.emptyObjectiveExpr VeriPB.Reflect.emptyNamesExpr
+      PBCatcher.Reflect.emptyObjectiveExpr PBCatcher.Reflect.emptyNamesExpr
       proofStrExpr
     let hEqTrue ← match ← Lean.Meta.nativeEqTrue `schur_reflect checkExpr
         (axiomDeclRange? := (← getRef)) with
       | .success prf => pure prf
       | .notTrue => throwError "Reflection checker returned false for {name}"
     let unsatProof := mkApp6
-      (mkConst ``VeriPB.Reflect.checkProof_sound)
+      (mkConst ``PBCatcher.Reflect.checkProof_sound)
       constrsExpr numVarsExpr
-      VeriPB.Reflect.emptyObjectiveExpr VeriPB.Reflect.emptyNamesExpr
+      PBCatcher.Reflect.emptyObjectiveExpr PBCatcher.Reflect.emptyNamesExpr
       proofStrExpr hEqTrue
     let finalProof := mkApp2 (mkConst ``no_schur_free_of_unsat)
       nExpr unsatProof
@@ -506,18 +506,18 @@ elab "schurk_reflect " nm:ident ppSpace kTerm:num ppSpace nTerm:num
     let constrsExpr := mkApp2 (mkConst ``encodeK) kExpr nExpr
     let proofStrExpr := mkStrLit proofStr
     let checkExpr := mkApp5
-      (mkConst ``VeriPB.Reflect.checkProofBool)
+      (mkConst ``PBCatcher.Reflect.checkProofBool)
       constrsExpr numVarsExpr
-      VeriPB.Reflect.emptyObjectiveExpr VeriPB.Reflect.emptyNamesExpr
+      PBCatcher.Reflect.emptyObjectiveExpr PBCatcher.Reflect.emptyNamesExpr
       proofStrExpr
     let hEqTrue ← match ← Lean.Meta.nativeEqTrue `schurk_reflect checkExpr
         (axiomDeclRange? := (← getRef)) with
       | .success prf => pure prf
       | .notTrue => throwError "Reflection checker returned false for {name}"
     let unsatProof := mkApp6
-      (mkConst ``VeriPB.Reflect.checkProof_sound)
+      (mkConst ``PBCatcher.Reflect.checkProof_sound)
       constrsExpr numVarsExpr
-      VeriPB.Reflect.emptyObjectiveExpr VeriPB.Reflect.emptyNamesExpr
+      PBCatcher.Reflect.emptyObjectiveExpr PBCatcher.Reflect.emptyNamesExpr
       proofStrExpr hEqTrue
     if k == 0 then throwError "k must be positive"
     let hkType := mkApp4 (mkConst ``LT.lt [.zero])

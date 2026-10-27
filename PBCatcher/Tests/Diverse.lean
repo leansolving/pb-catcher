@@ -3,7 +3,7 @@ Copyright (c) 2026 Stefan Szeider. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 Authors: Stefan Szeider
 -/
-import VeriPB.Tactic.Sat.FromVeriPB
+import PBCatcher.FromVeriPB
 
 /-!
 # Diverse Kernel Rule Tests
@@ -18,7 +18,7 @@ Each test produces a kernel-verified Lean theorem.
 * `pol w` — weaken operation
 -/
 
-namespace VeriPB.Tests.Diverse
+namespace PBCatcher.Tests.Diverse
 
 -- Delete derived constraint: derive a trivial constraint, delete it,
 -- then derive the real contradiction. Exercises `deld` rule.
@@ -89,7 +89,7 @@ output NONE ;
 conclusion UNSAT : 6;
 end pseudo-Boolean proof;"
 
-end VeriPB.Tests.Diverse
+end PBCatcher.Tests.Diverse
 
 /-!
 ## Normalization consistency tests
@@ -100,7 +100,7 @@ results matching the slow fuel-based definition. This guards the
 `@[implemented_by normalizeConstrFast]` trust.
 -/
 
-namespace VeriPB.Tests.Normalization
+namespace PBCatcher.Tests.Normalization
 
 open Sat.PB in
 private def termKey : Term → Nat × Bool
@@ -123,64 +123,64 @@ private def normEq (c1 c2 : Constr) : Bool :=
 
 -- Test 1: No normalization needed
 #guard normEq
-  (VeriPB.normalizeConstr ⟨[(2, .pos 0), (3, .pos 1)], 3⟩)
+  (PBCatcher.normalizeConstr ⟨[(2, .pos 0), (3, .pos 1)], 3⟩)
   ⟨[(2, .pos 0), (3, .pos 1)], 3⟩
 
 -- Test 2: Remove zero-coefficient term
 #guard normEq
-  (VeriPB.normalizeConstr ⟨[(0, .pos 0), (3, .pos 1)], 2⟩)
+  (PBCatcher.normalizeConstr ⟨[(0, .pos 0), (3, .pos 1)], 2⟩)
   ⟨[(3, .pos 1)], 2⟩
 
 -- Test 3: Cancel complementary pair (5·x0 + 3·~x0 ≥ 4 → 2·x0 ≥ 1)
 #guard normEq
-  (VeriPB.normalizeConstr ⟨[(5, .pos 0), (3, .neg 0)], 4⟩)
+  (PBCatcher.normalizeConstr ⟨[(5, .pos 0), (3, .neg 0)], 4⟩)
   ⟨[(2, .pos 0)], 1⟩
 
 -- Test 4: Merge like terms (2·x0 + 3·x0 ≥ 4 → 5·x0 ≥ 4)
 #guard normEq
-  (VeriPB.normalizeConstr ⟨[(2, .pos 0), (3, .pos 0)], 4⟩)
+  (PBCatcher.normalizeConstr ⟨[(2, .pos 0), (3, .pos 0)], 4⟩)
   ⟨[(5, .pos 0)], 4⟩
 
 -- Test 5: Guard prevents cancel when min > degree
 #guard normEq
-  (VeriPB.normalizeConstr ⟨[(2, .pos 0), (3, .neg 0)], 1⟩)
+  (PBCatcher.normalizeConstr ⟨[(2, .pos 0), (3, .neg 0)], 1⟩)
   ⟨[(2, .pos 0), (3, .neg 0)], 1⟩
 
 -- Test 6: Cancel produces all-zero terms → empty constraint
 #guard normEq
-  (VeriPB.normalizeConstr ⟨[(3, .pos 0), (3, .neg 0)], 5⟩)
+  (PBCatcher.normalizeConstr ⟨[(3, .pos 0), (3, .neg 0)], 5⟩)
   ⟨[], 2⟩
 
 -- Test 7: Multiple variables with cancel + zero removal
 #guard normEq
-  (VeriPB.normalizeConstr
+  (PBCatcher.normalizeConstr
     ⟨[(2, .pos 0), (1, .neg 0), (3, .pos 1), (2, .neg 1)], 5⟩)
   ⟨[(1, .pos 0), (1, .pos 1)], 2⟩
 
 -- Test 8: Large coefficients
 #guard normEq
-  (VeriPB.normalizeConstr ⟨[(100, .pos 0), (50, .neg 0)], 80⟩)
+  (PBCatcher.normalizeConstr ⟨[(100, .pos 0), (50, .neg 0)], 80⟩)
   ⟨[(50, .pos 0)], 30⟩
 
 -- Test 9: All zeros after cancel → empty
 #guard normEq
-  (VeriPB.normalizeConstr ⟨[(4, .pos 0), (4, .neg 0)], 10⟩)
+  (PBCatcher.normalizeConstr ⟨[(4, .pos 0), (4, .neg 0)], 10⟩)
   ⟨[], 6⟩
 
 -- Test 10: Multiple like terms to merge (1+2+3=6)
 #guard normEq
-  (VeriPB.normalizeConstr
+  (PBCatcher.normalizeConstr
     ⟨[(1, .pos 0), (2, .pos 0), (3, .pos 0)], 5⟩)
   ⟨[(6, .pos 0)], 5⟩
 
 -- Test 11: Contradictory after normalization
-#guard (VeriPB.normalizeConstr
+#guard (PBCatcher.normalizeConstr
   ⟨[(1, .pos 0), (1, .neg 0)], 3⟩).isContra
 
 -- Test 12: Mixed cancel + merge + zero removal
 #guard normEq
-  (VeriPB.normalizeConstr
+  (PBCatcher.normalizeConstr
     ⟨[(2, .pos 0), (3, .neg 0), (1, .pos 0)], 4⟩)
   ⟨[], 1⟩
 
-end VeriPB.Tests.Normalization
+end PBCatcher.Tests.Normalization

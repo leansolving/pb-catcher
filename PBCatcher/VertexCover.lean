@@ -5,9 +5,9 @@ Authors: Stefan Szeider
 -/
 import Lean
 import Std
-import VeriPB.Tactic.Sat.PseudoBoolean
-import VeriPB.Tactic.Sat.Reflect
-import VeriPB.Tactic.Sat.IndependentSet
+import PBCatcher.PseudoBoolean
+import PBCatcher.Reflect
+import PBCatcher.IndependentSet
 
 /-!
 # Trusted Vertex Cover Encoding (optimization form)
@@ -72,7 +72,7 @@ def mkCoverConstrs : List (Nat × Nat) → List Constr
 def encodeVC (g : Graph) : Array Constr := (mkCoverConstrs g.edges).toArray
 
 /-- The objective `Σ x_i` (offset 0). -/
-def vcObjective (g : Graph) : VeriPB.Reflect.Objective :=
+def vcObjective (g : Graph) : PBCatcher.Reflect.Objective :=
   (List.range g.numVerts).map fun i => (1, Literal.pos i)
 
 -- Encoding soundness
@@ -100,14 +100,14 @@ theorem mem_mkCoverConstrs : (es : List (Nat × Nat)) → (u v : Nat) →
       exact Or.inr (mem_mkCoverConstrs es u v he)
 
 theorem encodeVC_sat_cover (g : Graph) (f : Valuation)
-    (h : VeriPB.Reflect.FormulaSat (encodeVC g) f) : isVertexCover g f := by
+    (h : PBCatcher.Reflect.FormulaSat (encodeVC g) f) : isVertexCover g f := by
   intro e he
   have hc := h _ (by simpa [encodeVC] using mem_mkCoverConstrs g.edges e.1 e.2 he)
   simp only [Constr.sat, evalSum, evalLit] at hc
   cases h1 : f e.1 <;> cases h2 : f e.2 <;> simp_all
 
 theorem cover_sat_encodeVC (g : Graph) (f : Valuation) (h : isVertexCover g f) :
-    VeriPB.Reflect.FormulaSat (encodeVC g) f := by
+    PBCatcher.Reflect.FormulaSat (encodeVC g) f := by
   intro c hc
   have hc' : c ∈ mkCoverConstrs g.edges := by simpa [encodeVC] using hc
   obtain ⟨u, v, he, hceq⟩ := mkCoverConstrs_mem g.edges c hc'
@@ -118,26 +118,26 @@ theorem cover_sat_encodeVC (g : Graph) (f : Valuation) (h : isVertexCover g f) :
 
 /-- The OPB value of `f` is the number of selected vertices. -/
 theorem vcObjective_opbVal (g : Graph) (f : Valuation) :
-    VeriPB.Reflect.opbVal (vcObjective g) 0 f = (countTrue f g.numVerts : Int) := by
-  simp only [VeriPB.Reflect.opbVal, VeriPB.Reflect.objVal, vcObjective, evalSum_posLits]
+    PBCatcher.Reflect.opbVal (vcObjective g) 0 f = (countTrue f g.numVerts : Int) := by
+  simp only [PBCatcher.Reflect.opbVal, PBCatcher.Reflect.objVal, vcObjective, evalSum_posLits]
   omega
 
 /-- Bridge: the bounds `k ≤ |C| ≤ k` over the edge constraints give the
 vertex cover number `k`. -/
 theorem vertexCoverNumber_of_bounds (g : Graph) (k : Nat)
     (_hedges : edgesInRange g = true)
-    (h : VeriPB.Reflect.formulaBounds (encodeVC g) (vcObjective g) 0
+    (h : PBCatcher.Reflect.formulaBounds (encodeVC g) (vcObjective g) 0
       (some (k : Int)) (some (k : Int))) :
     vertexCoverNumber g k := by
   obtain ⟨hlb, hub⟩ := h
   refine ⟨?_, ?_⟩
   · obtain ⟨ρ, hρ, hval⟩ := hub
-    have hv : VeriPB.Reflect.opbVal (vcObjective g) 0 ρ ≤ (k : Int) := hval
+    have hv : PBCatcher.Reflect.opbVal (vcObjective g) 0 ρ ≤ (k : Int) := hval
     rw [vcObjective_opbVal] at hv
     exact ⟨ρ, encodeVC_sat_cover g ρ hρ, by omega⟩
   · intro f hcover
     have hv := hlb f (cover_sat_encodeVC g f hcover)
-    have hv' : (k : Int) ≤ VeriPB.Reflect.opbVal (vcObjective g) 0 f := hv
+    have hv' : (k : Int) ≤ PBCatcher.Reflect.opbVal (vcObjective g) 0 f := hv
     rw [vcObjective_opbVal] at hv'
     omega
 
@@ -172,8 +172,8 @@ elab "vertex_cover_reflect " n:ident ppSpace gExpr:term:max
     let hedgesType := mkApp3 (mkConst ``Eq [.succ .zero]) (mkConst ``Bool)
       (mkApp (mkConst ``edgesInRange) gVal) (mkConst ``Bool.true)
     let hedgesProof ← mkDecideProof hedgesType
-    let claim := VeriPB.Reflect.Claim.bounds (some (k : Int)) (some (k : Int))
-    let boundsProof ← VeriPB.Reflect.mkClaimProof `vertex_cover_reflect
+    let claim := PBCatcher.Reflect.Claim.bounds (some (k : Int)) (some (k : Int))
+    let boundsProof ← PBCatcher.Reflect.mkClaimProof `vertex_cover_reflect
       constrsExpr numVarsExpr objExpr offsetExpr proofStr claim
       (ref? := some (← getRef))
     let finalProof := mkApp4 (mkConst ``vertexCoverNumber_of_bounds) gVal kVal

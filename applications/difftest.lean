@@ -3,12 +3,12 @@ Copyright (c) 2026 Stefan Szeider. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 Authors: Stefan Szeider
 -/
-import VeriPB.Tactic.Sat.Tests.Differential
+import PBCatcher.Tests.Differential
 
 /-!
 Release-time differential test of the fast reflection checker against the
 verified step function on every application proof (see
-`VeriPB/Tactic/Sat/Tests/Differential.lean` for the harness). Run from the
+`PBCatcher/Tests/Differential.lean` for the harness). Run from the
 project root after `lake build`:
 
     lake env lean applications/difftest.lean
@@ -16,7 +16,7 @@ project root after `lake build`:
 The verified List-based pipeline is slow; the whole run takes a few minutes.
 -/
 
-open VeriPB.Tests.Differential in
+open PBCatcher.Tests.Differential in
 #eval show IO Unit from do
   let cases : List (String × String) := [
     ("php", "php32"),

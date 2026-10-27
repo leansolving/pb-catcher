@@ -5,9 +5,9 @@ Authors: Stefan Szeider
 -/
 import Lean
 import Std
-import VeriPB.Tactic.Sat.PseudoBoolean
-import VeriPB.Tactic.Sat.FromVeriPB
-import VeriPB.Tactic.Sat.Reflect
+import PBCatcher.PseudoBoolean
+import PBCatcher.FromVeriPB
+import PBCatcher.Reflect
 
 /-!
 # Trusted Ramsey Number Encoding
@@ -354,7 +354,7 @@ elab "ramsey_decide " nm:ident ppSpace nTerm:num
     let numVars := numVarsInternal n
     let auxName := name ++ `aux
     let (ctx, _ctx', pbProofConst) ←
-      VeriPB.fromVeriPBDirect constrs numVars proofStr
+      PBCatcher.fromVeriPBDirect constrs numVars proofStr
         auxName
     let (finalType, finalProof) ←
       buildBridgeProof nExpr ctx pbProofConst
@@ -382,18 +382,18 @@ elab "ramsey_reflect " nm:ident ppSpace nTerm:num
       mkApp (mkConst ``numVarsInternal) nExpr
     let proofStrExpr := mkStrLit proofStr
     let checkExpr := mkApp5
-      (mkConst ``VeriPB.Reflect.checkProofBool)
+      (mkConst ``PBCatcher.Reflect.checkProofBool)
       constrsExpr numVarsExpr
-      VeriPB.Reflect.emptyObjectiveExpr VeriPB.Reflect.emptyNamesExpr
+      PBCatcher.Reflect.emptyObjectiveExpr PBCatcher.Reflect.emptyNamesExpr
       proofStrExpr
     let hEqTrue ← match ← Lean.Meta.nativeEqTrue `ramsey_reflect checkExpr
         (axiomDeclRange? := (← getRef)) with
       | .success prf => pure prf
       | .notTrue => throwError "Reflection checker returned false for {name}"
     let unsatProof := mkApp6
-      (mkConst ``VeriPB.Reflect.checkProof_sound)
+      (mkConst ``PBCatcher.Reflect.checkProof_sound)
       constrsExpr numVarsExpr
-      VeriPB.Reflect.emptyObjectiveExpr VeriPB.Reflect.emptyNamesExpr
+      PBCatcher.Reflect.emptyObjectiveExpr PBCatcher.Reflect.emptyNamesExpr
       proofStrExpr hEqTrue
     let finalProof := mkApp2
       (mkConst ``no_ramsey_free_of_unsat)
@@ -632,18 +632,18 @@ elab "ramsey_asym_reflect " nm:ident ppSpace nTerm:num
     let constrsExpr := mkApp3 (mkConst ``encodeAsym) nExpr sExpr tExpr
     let proofStrExpr := mkStrLit proofStr
     let checkExpr := mkApp5
-      (mkConst ``VeriPB.Reflect.checkProofBool)
+      (mkConst ``PBCatcher.Reflect.checkProofBool)
       constrsExpr numVarsExpr
-      VeriPB.Reflect.emptyObjectiveExpr VeriPB.Reflect.emptyNamesExpr
+      PBCatcher.Reflect.emptyObjectiveExpr PBCatcher.Reflect.emptyNamesExpr
       proofStrExpr
     let hEqTrue ← match ← Lean.Meta.nativeEqTrue `ramsey_asym_reflect checkExpr
         (axiomDeclRange? := (← getRef)) with
       | .success prf => pure prf
       | .notTrue => throwError "Reflection checker returned false for {name}"
     let unsatProof := mkApp6
-      (mkConst ``VeriPB.Reflect.checkProof_sound)
+      (mkConst ``PBCatcher.Reflect.checkProof_sound)
       constrsExpr numVarsExpr
-      VeriPB.Reflect.emptyObjectiveExpr VeriPB.Reflect.emptyNamesExpr
+      PBCatcher.Reflect.emptyObjectiveExpr PBCatcher.Reflect.emptyNamesExpr
       proofStrExpr hEqTrue
     -- Build side-condition proofs: s ≥ 2, t ≥ 2
     if s < 2 then throwError "s must be ≥ 2"

@@ -3,7 +3,7 @@ Copyright (c) 2026 Stefan Szeider. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 Authors: Stefan Szeider
 -/
-import VeriPB.Tactic.Sat.FromVeriPB
+import PBCatcher.FromVeriPB
 
 /-!
 # VeriPB Inline Tests
@@ -14,7 +14,7 @@ a Lean proof term via the metaprogram, and registers a theorem with
 zero sorry.
 -/
 
-namespace VeriPB.Tests
+namespace PBCatcher.Tests
 
 -- Trivial UNSAT: x AND NOT x. 1 variable, 2 clauses.
 veripb_proof trivial_unsat
@@ -256,4 +256,4 @@ output NONE ;
 conclusion UNSAT : 3;
 end pseudo-Boolean proof;"
 
-end VeriPB.Tests
+end PBCatcher.Tests

@@ -5,9 +5,9 @@ Authors: Stefan Szeider
 -/
 import Lean
 import Std
-import VeriPB.Tactic.Sat.PseudoBoolean
-import VeriPB.Tactic.Sat.FromVeriPB
-import VeriPB.Tactic.Sat.Dominance
+import PBCatcher.PseudoBoolean
+import PBCatcher.FromVeriPB
+import PBCatcher.Dominance
 
 /-!
 # Verified VeriPB checker definitions
@@ -19,13 +19,13 @@ implication, the redundance goals and their coverage tests, solution
 checking, the conclusion test, and the pbc depth measure.
 
 The step loop (`processRedItems`, `checkRedundance`, `execStepsFuel`) stays
-next to its soundness proofs in `VeriPB.Tactic.Sat.Reflect`, because those
+next to its soundness proofs in `PBCatcher.Reflect`, because those
 proofs rewrite with hypotheses about the `match` expressions inside it and
 Lean's matcher cache is not shared across modules.  The array-based runtime
-replacement lives in `VeriPB.Tactic.Sat.ReflectFast`.
+replacement lives in `PBCatcher.ReflectFast`.
 -/
 
-namespace VeriPB.Reflect
+namespace PBCatcher.Reflect
 
 open Sat.PB
 
@@ -42,7 +42,7 @@ fuel recursion) to enable formal verification; only the fuel measure
 
 /-- Objective function to minimize: nonnegative coefficients over literals,
 as the OPB `min:` line after normalization. The constant offset of the OPB
-objective (`VeriPB.OPBObjective.offset`) is kept apart (`BoolCheckState.offset`):
+objective (`PBCatcher.OPBObjective.offset`) is kept apart (`BoolCheckState.offset`):
 the OPB value of a valuation is `objVal obj v + offset` (`opbVal`).
 A decision instance has the empty objective `[]`. -/
 abbrev Objective := List Sat.PB.Term
@@ -131,7 +131,7 @@ def mkDBRec : List Constr → Nat → Std.HashMap Nat Constr
 /-- Initialize check state from an array of constraints and an objective. -/
 def BoolCheckState.fromConstrs (constrs : Array Constr) (numVars : Nat)
     (objective : Objective) (offset : Int := 0) : BoolCheckState :=
-  { db := mkDBRec (constrs.toList.map VeriPB.normalizeConstr) 1
+  { db := mkDBRec (constrs.toList.map PBCatcher.normalizeConstr) 1
     origConstrs := constrs
     objective := objective
     offset := offset
@@ -161,32 +161,32 @@ def allCore (s : BoolCheckState) : Bool :=
 /-! ### Pol RPN execution (pure recursive) -/
 
 /-- Execute a single pol operation on the stack. -/
-def execPolOne (db : Std.HashMap Nat Constr) (stack : List VeriPB.StackElem)
-    (op : VeriPB.PolOp) : Option (List VeriPB.StackElem) :=
+def execPolOne (db : Std.HashMap Nat Constr) (stack : List PBCatcher.StackElem)
+    (op : PBCatcher.PolOp) : Option (List PBCatcher.StackElem) :=
   match op with
   | .pushId id => match db[id]? with
     | some c => some (.constr c :: stack)
     | none => none
   | .pushNat n => some (.nat n :: stack)
-  | .pushLitAxiom lit => match VeriPB.opbLitToPB lit with
+  | .pushLitAxiom lit => match PBCatcher.opbLitToPB lit with
     | .ok pbLit => some (.constr ⟨[(1, pbLit)], 0⟩ :: stack)
     | .error _ => none
   | .add => match stack with
     | .constr c2 :: .constr c1 :: rest =>
-      some (.constr (VeriPB.addConstrs c1 c2) :: rest)
+      some (.constr (PBCatcher.addConstrs c1 c2) :: rest)
     | _ => none
   | .mul => match stack with
     | .nat k :: .constr c :: rest =>
-      some (.constr (VeriPB.mulConstr c k) :: rest)
+      some (.constr (PBCatcher.mulConstr c k) :: rest)
     | _ => none
   | .div => match stack with
     | .nat k :: .constr c :: rest =>
       if k == 0 then none
-      else some (.constr (VeriPB.divConstr (VeriPB.normalizeConstr c) k) :: rest)
+      else some (.constr (PBCatcher.divConstr (PBCatcher.normalizeConstr c) k) :: rest)
     | _ => none
   | .saturate => match stack with
     | .constr c :: rest =>
-      some (.constr (VeriPB.saturateConstr (VeriPB.normalizeConstr c)) :: rest)
+      some (.constr (PBCatcher.saturateConstr (PBCatcher.normalizeConstr c)) :: rest)
     | _ => none
   | .weaken varName => match stack with
     | .constr c :: rest =>
@@ -194,7 +194,7 @@ def execPolOne (db : Std.HashMap Nat Constr) (stack : List VeriPB.StackElem)
         match (varName.drop 1).toString.toNat? with
         | some n => if n > 0 then
             -- VeriPB weakens the normalized constraint
-            some (.constr (VeriPB.weakenConstr (VeriPB.normalizeConstr c) (n - 1)) :: rest)
+            some (.constr (PBCatcher.weakenConstr (PBCatcher.normalizeConstr c) (n - 1)) :: rest)
           else none
         | none => none
       else none
@@ -203,31 +203,31 @@ def execPolOne (db : Std.HashMap Nat Constr) (stack : List VeriPB.StackElem)
     | .nat k :: .constr c :: rest =>
       -- `k -`: lower the degree of the normalized constraint by `k`
       -- (Nat subtraction: a weaker constraint, so always sound)
-      let nc := VeriPB.normalizeConstr c
+      let nc := PBCatcher.normalizeConstr c
       some (.constr ⟨nc.terms, nc.degree - k⟩ :: rest)
     | _ => none
   | .divVar => match stack with
     | .nat k :: .constr c :: rest =>
       -- `k c`: variable-form division of the normalized constraint
       if k == 0 then none
-      else some (.constr (Sat.PB.cgDivConstr (VeriPB.normalizeConstr c) k) :: rest)
+      else some (.constr (Sat.PB.cgDivConstr (PBCatcher.normalizeConstr c) k) :: rest)
     | _ => none
   | .mir => match stack with
     | .nat k :: .constr c :: rest =>
       -- `k n`: normalized MIR cut of the normalized constraint
       if k == 0 then none
-      else some (.constr (Sat.PB.mirConstr (VeriPB.normalizeConstr c) k) :: rest)
+      else some (.constr (Sat.PB.mirConstr (PBCatcher.normalizeConstr c) k) :: rest)
     | _ => none
   | .mirVar => match stack with
     | .nat k :: .constr c :: rest =>
       -- `k m`: variable-form MIR cut of the normalized constraint
       if k == 0 then none
-      else some (.constr (Sat.PB.mirVarConstr (VeriPB.normalizeConstr c) k) :: rest)
+      else some (.constr (Sat.PB.mirVarConstr (PBCatcher.normalizeConstr c) k) :: rest)
     | _ => none
 
 /-- Execute pol RPN operations on a stack. Pure recursive. -/
 def execPolOps (db : Std.HashMap Nat Constr) :
-    List VeriPB.PolOp → List VeriPB.StackElem → Option (List VeriPB.StackElem)
+    List PBCatcher.PolOp → List PBCatcher.StackElem → Option (List PBCatcher.StackElem)
   | [], stack => some stack
   | op :: rest, stack =>
     match execPolOne db stack op with
@@ -235,7 +235,7 @@ def execPolOps (db : Std.HashMap Nat Constr) :
     | none => none
 
 /-- Execute pol RPN and return result constraint (or none on error). -/
-def execPolRPNBool (ops : List VeriPB.PolOp) (db : Std.HashMap Nat Constr) :
+def execPolRPNBool (ops : List PBCatcher.PolOp) (db : Std.HashMap Nat Constr) :
     Option Constr :=
   match execPolOps db ops [] with
   | some [.constr c] => some c
@@ -341,7 +341,7 @@ def varBound (hs : List Constr) : Nat :=
 
 /-- Resolve a RUP hint to a constraint. -/
 def resolveHint (negConstr : Constr) (db : Std.HashMap Nat Constr)
-    (h : VeriPB.RupHint) : Option Constr :=
+    (h : PBCatcher.RupHint) : Option Constr :=
   match h with
   | .negC => some negConstr
   | .id n => db[n]?
@@ -350,7 +350,7 @@ def resolveHint (negConstr : Constr) (db : Std.HashMap Nat Constr)
 resolved before propagation, so a missing id after the conflicting hint
 rejects the step (CakePB never looks it up and accepts). -/
 def resolveHints (negConstr : Constr) (db : Std.HashMap Nat Constr) :
-    List VeriPB.RupHint → Option (List Constr)
+    List PBCatcher.RupHint → Option (List Constr)
   | [] => some []
   | h :: hs => match resolveHint negConstr db h, resolveHints negConstr db hs with
     | some c, some cs => some (c :: cs)
@@ -363,14 +363,14 @@ unsatisfiable on its own, and its negation is trivially true: the negated
 terms with degree `0` (as `negTriv`; CakePB's `not` keeps the terms with a
 non-positive degree). -/
 def rupNegate (c : Constr) : Constr :=
-  let nc := VeriPB.normalizeConstr c
+  let nc := PBCatcher.normalizeConstr c
   if nc.degree ≤ nc.coeffSum then nc.negate else ⟨nc.negate.terms, 0⟩
 
 /-- Verify a RUP step: one propagation pass over the resolved hint
 constraints (`~` resolves to `negConstr`), from the empty assignment,
 reaches a conflict. The assignment covers `varBound hs` variables, so every
 literal of the hints is in range. `numVars` is unused. -/
-def verifyRupBool (negConstr : Constr) (hints : List VeriPB.RupHint)
+def verifyRupBool (negConstr : Constr) (hints : List PBCatcher.RupHint)
     (db : Std.HashMap Nat Constr) (_numVars : Nat) : Bool :=
   match resolveHints negConstr db hints with
   | none => false
@@ -394,8 +394,8 @@ def constrMatchNorm (c1 c2 : Constr) : Bool :=
 
 /-- Check if a constraint (after normalization) is in the database. -/
 def constrInDB (c : Constr) (db : Std.HashMap Nat Constr) : Bool :=
-  let nc := VeriPB.normalizeConstr c
-  db.toList.any fun (_, dbC) => constrMatchNorm nc (VeriPB.normalizeConstr dbC)
+  let nc := PBCatcher.normalizeConstr c
+  db.toList.any fun (_, dbC) => constrMatchNorm nc (PBCatcher.normalizeConstr dbC)
 
 /-! ### Syntactic implication
 
@@ -477,7 +477,7 @@ def touchedSatisfied (subst : List (Nat × Sat.PB.SubstVal))
 
 /-- Normalized goal constraint `D|ω`. -/
 def substGoal (subst : List (Nat × Sat.PB.SubstVal)) (D : Constr) : Constr :=
-  VeriPB.normalizeConstr (Sat.PB.applySubstConstr subst D)
+  PBCatcher.normalizeConstr (Sat.PB.applySubstConstr subst D)
 
 /-- Objective goal `f - f|ω ≥ 0` as a Nat constraint:
 `Σ a l + Σ a ¬(l|ω) ≥ Σ a`, with constant substitutions folded into the
@@ -486,7 +486,7 @@ applying the witness. -/
 def objGoalConstr (subst : List (Nat × Sat.PB.SubstVal)) (obj : Objective) : Constr :=
   let s := Sat.PB.applySubstConstr subst
     ⟨obj.map (fun (a, l) => (a, l.negate)), Sat.PB.coeffSumR obj⟩
-  VeriPB.normalizeConstr ⟨obj ++ s.terms, s.degree⟩
+  PBCatcher.normalizeConstr ⟨obj ++ s.terms, s.degree⟩
 
 /-- Goal constraint of a `proofgoal` id: `#1` is `C|ω`, `#2` the objective
 goal (only with an objective), a number `n` is `D|ω` for the constraint `n`
@@ -537,7 +537,7 @@ def dbGoalCovered (subst : List (Nat × Sat.PB.SubstVal)) (nC : Constr)
   touchedSatisfied subst D.terms ||
     (let G := substGoal subst D
      trivialByPair G ||
-     impliesSyntactic (VeriPB.normalizeConstr D) G ||
+     impliesSyntactic (PBCatcher.normalizeConstr D) G ||
      impliesSyntactic nC G ||
      proved.any (fun p => !p.1.startsWith "#" && constrMatchNorm G p.2) ||
      constrInDB G lookupDb)
@@ -545,25 +545,25 @@ def dbGoalCovered (subst : List (Nat × Sat.PB.SubstVal)) (nC : Constr)
 /-- Steps allowed inside subproofs (`pbc`, `proofgoal`, the top level of a
 `red` or checked-deletion subproof): CakePB's `lstep`s. All of them derive
 implied constraints or delete. -/
-def isLStep : VeriPB.ProofStep → Bool
+def isLStep : PBCatcher.ProofStep → Bool
   | .pol _ | .rup _ _ | .ia _ _ | .pbc _ _ _ | .deld _ => true
   | _ => false
 
 /-- The old `red` constructor's goals as subproof items. -/
-def goalsToItems (goals : Array (String × Array VeriPB.ProofStep × Nat)) :
-    List VeriPB.ProofStep :=
+def goalsToItems (goals : Array (String × Array PBCatcher.ProofStep × Nat)) :
+    List PBCatcher.ProofStep :=
   goals.toList.map fun (g, steps, h) => .proofgoal g steps (some h)
 
 /-! ### Solution logging -/
 
 /-- Solution-logging steps (`sol`, `soli`). -/
-def isSolStep : VeriPB.ProofStep → Bool
+def isSolStep : PBCatcher.ProofStep → Bool
   | .sol _ _ | .soli _ _ => true
   | _ => false
 
 /-- Steps rejected inside a subproof: everything but the `lstep`s
 (`isLStep`). In particular solution logging, conclusions and `red`. -/
-def innerStepForbidden (s : VeriPB.ProofStep) : Bool := !isLStep s
+def innerStepForbidden (s : PBCatcher.ProofStep) : Bool := !isLStep s
 
 /-- Total valuation of a logged solution: a variable is true iff its
 positive literal is listed (unlisted variables are false). -/
@@ -583,8 +583,8 @@ objective value. The literal list is read as a total valuation
 (`solValuation`); it must satisfy every original constraint. This is
 stricter than VeriPB, which checks against the core set. -/
 def checkSolution (F : Array Constr) (obj : Objective)
-    (lits : List VeriPB.OPBLit) : Option Nat :=
-  match lits.mapM VeriPB.opbLitToPB with
+    (lits : List PBCatcher.OPBLit) : Option Nat :=
+  match lits.mapM PBCatcher.opbLitToPB with
   | .error _ => none
   | .ok pl =>
     let ρ := solValuation pl
@@ -593,8 +593,8 @@ def checkSolution (F : Array Constr) (obj : Objective)
 /-- `checkSolution` returning the values of the solution under the original
 objective `obj` and the current objective `curObj` (in that order). -/
 def checkSolutionVals (F : Array Constr) (obj curObj : Objective)
-    (lits : List VeriPB.OPBLit) : Option (Nat × Nat) :=
-  match lits.mapM VeriPB.opbLitToPB with
+    (lits : List PBCatcher.OPBLit) : Option (Nat × Nat) :=
+  match lits.mapM PBCatcher.opbLitToPB with
   | .error _ => none
   | .ok pl =>
     let ρ := solValuation pl
@@ -652,10 +652,10 @@ Semantics: testcampaign/p2b/semantics.md §2.2-2.3 (VeriPB `objective_update.rs`
 /-- A proof objective (`obju`, `eobj`: integer coefficients plus a constant)
 as nonnegative terms plus the constant, as the OPB parser reads an
 objective: `-a·l` becomes `a·¬l` with `-a` added to the constant. -/
-def proofObjToPB (pobj : VeriPB.ProofObjective) :
+def proofObjToPB (pobj : PBCatcher.ProofObjective) :
     Except String (Objective × Int) := do
   let ts ← pobj.terms.mapM fun (c, l) => do
-    let pl ← VeriPB.opbLitToPB l
+    let pl ← PBCatcher.opbLitToPB l
     pure (c, pl)
   let (terms, adj) := ts.foldl (init := (([] : List Sat.PB.Term), (0 : Int)))
     fun (acc, adj) (c, l) =>
@@ -693,7 +693,7 @@ def normalizeObjective (obj : Objective) (c : Int) : Objective × Int :=
 /-- The objective after `obju`: `new` replaces it, `diff` adds the terms and
 the constant; both merged (`normalizeObjective`), as VeriPB and CakePB keep
 their objective (later `soli`/`obji` constraints are built from it). -/
-def objuNew (kind : VeriPB.ObjUpdateKind) (curObj : Objective)
+def objuNew (kind : PBCatcher.ObjUpdateKind) (curObj : Objective)
     (curOffset : Int) (terms : Objective) (constant : Int) :
     Objective × Int :=
   match kind with
@@ -728,19 +728,19 @@ def objuGoalCovered (gid : String) (G : Constr)
 /-- `eobj f`: the instance has an objective and `f` equals the current
 objective as a function. No state change. -/
 def eobjOk (hasObj : Bool) (curObj : Objective) (curOffset : Int)
-    (pobj : VeriPB.ProofObjective) : Bool :=
+    (pobj : PBCatcher.ProofObjective) : Bool :=
   hasObj && match proofObjToPB pobj with
     | .error _ => false
     | .ok (ts, c) => canonObj ts c == canonObj curObj curOffset
 
 /-- Conclusion steps (`conclusion NONE` included). -/
-def isConclusionStep : VeriPB.ProofStep → Bool
+def isConclusionStep : PBCatcher.ProofStep → Bool
   | .conclusion _ | .conclusionSat _ | .conclusionBounds _ _ _ _
   | .conclusionNone => true
   | _ => false
 
 /-- Output steps (`output NONE` and the output claims). -/
-def isOutputStep : VeriPB.ProofStep → Bool
+def isOutputStep : PBCatcher.ProofStep → Bool
   | .output | .outputClaim _ _ => true
   | _ => false
 
@@ -752,7 +752,7 @@ and VeriPB's `conclusion.rs` where the two agree; see MEM_039 §6 and the
 P2a report for the citations and deviations. A conclusion is evaluated on
 the final state of the step loop. -/
 
-/-- What a proof's conclusion certifies; `VeriPB.Reflect.Claim.holds` gives
+/-- What a proof's conclusion certifies; `PBCatcher.Reflect.Claim.holds` gives
 the meaning. Bounds refer to the normalized objective in minimization form,
 `objVal objective v + offset`; for `max: f` the parser negates the objective,
 so the bounds are on `−f`. `none` stands for `INF`. -/
@@ -763,7 +763,7 @@ inductive Claim where
   deriving DecidableEq, Repr, Inhabited
 
 /-- A `conclusion BOUNDS` bound as an `Option Int` (`INF` is `none`). -/
-def boundOpt : VeriPB.Bound → Option Int
+def boundOpt : PBCatcher.Bound → Option Int
   | .finite v => some v
   | .inf => none
 
@@ -794,8 +794,8 @@ def lowerBoundOk (getC : Nat → Option Constr) (curObj : Objective)
         (match best with
           | none => true
           | some b => decide (l ≤ b)) &&
-        impliesSyntactic (VeriPB.normalizeConstr D)
-          (VeriPB.normalizeConstr (lowerBoundConstr curObj curOffset l))
+        impliesSyntactic (PBCatcher.normalizeConstr D)
+          (PBCatcher.normalizeConstr (lowerBoundConstr curObj curOffset l))
 
 /-- Upper bound `ub [: lits]` of `conclusion BOUNDS` (CakePB): `INF` needs
 nothing; a finite `ub` needs a solution of original OPB value at most
@@ -803,7 +803,7 @@ nothing; a finite `ub` needs a solution of original OPB value at most
 `lits` the best witnessed value `bestWit` (CakePB `bound`). -/
 def upperBoundOk (F : Array Constr) (obj : Objective) (offset : Int)
     (bestWit : Option Int) (ub : Option Int)
-    (lits : Option (List VeriPB.OPBLit)) : Bool :=
+    (lits : Option (List PBCatcher.OPBLit)) : Bool :=
   match ub with
   | none => true
   | some u =>
@@ -818,7 +818,7 @@ def upperBoundOk (F : Array Constr) (obj : Objective) (offset : Int)
 /-- `conclusion SAT [: lits]` (CakePB `HDSat`): with `lits`, a solution of
 the original formula; without, some logged solution (`bestWit`). -/
 def satOk (F : Array Constr) (obj : Objective) (bestWit : Option Int)
-    (lits : Option (List VeriPB.OPBLit)) : Bool :=
+    (lits : Option (List PBCatcher.OPBLit)) : Bool :=
   match lits with
   | none => bestWit.isSome
   | some ls => (checkSolution F obj ls).isSome
@@ -854,7 +854,7 @@ Lean command receives no output formula, and the registered theorem is the
 conclusion's, which never mentions the output claim. `IMPLICIT`,
 `PERMUTATION` and `CONSTRAINTS` outputs are rejected (CakePB cannot parse
 them). -/
-def outputClaimOk (ctx : ConclCtx) : VeriPB.ProofStep → Bool
+def outputClaimOk (ctx : ConclCtx) : PBCatcher.ProofStep → Bool
   | .output => true
   | .outputClaim g .file =>
     match g with
@@ -868,8 +868,8 @@ step and the conclusion step are the last two steps, in this order, and the
 proof has no other output or conclusion step (VeriPB `conclusion.rs`
 `DoubleConclusion`, `WrongFooterOrder`, `output.rs` `DoubleOutput`; CakePB
 `parse_output_concl`). -/
-def lastFooter (steps : Array VeriPB.ProofStep) :
-    Option (VeriPB.ProofStep × VeriPB.ProofStep) :=
+def lastFooter (steps : Array PBCatcher.ProofStep) :
+    Option (PBCatcher.ProofStep × PBCatcher.ProofStep) :=
   match steps.toList.reverse with
   | c :: o :: rest =>
     if isConclusionStep c && isOutputStep o &&
@@ -885,7 +885,7 @@ bound on the objective (VeriPB `ConclusionUnsatSolutionLogged`, CakePB
 `HDUnsat` needs `dbound = NONE`). The same rule as the `.unsat` claim of
 `conclusionClaim` (the UNSAT path `checkProofBool` and `proofClaim?` accept
 the same proofs). -/
-def hasUnsatConclusion (steps : Array VeriPB.ProofStep)
+def hasUnsatConclusion (steps : Array PBCatcher.ProofStep)
     (state : BoolCheckState) : Bool :=
   state.best.isNone && match lastFooter steps with
     | some (o, .conclusion id) =>
@@ -897,7 +897,7 @@ def hasUnsatConclusion (steps : Array VeriPB.ProofStep)
 /-- The claim certified by a conclusion step on a final state given by its
 database lookup `getC`, formula `F` and objective context `ctx`. -/
 def conclusionClaim (getC : Nat → Option Constr) (F : Array Constr)
-    (ctx : ConclCtx) : VeriPB.ProofStep → Option Claim
+    (ctx : ConclCtx) : PBCatcher.ProofStep → Option Claim
   | .conclusion id =>
     match getC id with
     | some c =>
@@ -931,8 +931,8 @@ indices; the checks run on local databases and allocate no global id. -/
 /-- The `red` step of a spec block (either constructor): constraint, witness,
 subproof items and closing hint. Every other statement is rejected
 (CakePB `parse_spec_aux`). -/
-def specRedOf : VeriPB.ProofStep →
-    Option (VeriPB.OPBConstr × List (String × String) × List VeriPB.ProofStep ×
+def specRedOf : PBCatcher.ProofStep →
+    Option (PBCatcher.OPBConstr × List (String × String) × List PBCatcher.ProofStep ×
       Option Nat)
   | .red constr subst goals => some (constr, subst, goalsToItems goals, none)
   | .strengthening .red constr subst items qedHint =>
@@ -1036,14 +1036,14 @@ the strict goal (premises `Def[σ≥]`, the block derives a contradiction),
 
 /-- Provenance compatible with a `leq`-restricted goal (order, objective and
 core goals): proved outside any scope or in `scope leq`. -/
-def provLeqOk : Option VeriPB.ScopeKind → Bool
+def provLeqOk : Option PBCatcher.ScopeKind → Bool
   | none => true
   | some .leq => true
   | some .geq => false
 
 /-- Provenance compatible with the strict goal: proved outside any scope or in
 `scope geq` (CakePB `find_scope_1`). -/
-def provGeqOk : Option VeriPB.ScopeKind → Bool
+def provGeqOk : Option PBCatcher.ScopeKind → Bool
   | none => true
   | some .geq => true
   | some .leq => false
@@ -1102,7 +1102,7 @@ def domStrictId (k : Nat) (gid : String) : Bool :=
 /-- Premises of the scopes of a `dom` subproof: `Spec[σ≤]` for `scope leq`,
 `Spec[σ≥]` for `scope geq` (normalized; CakePB `dom_subgoals` scopes). -/
 def domScopePrem (O : Sat.PB.Dominance.OrderData) (z : List Sat.PB.Literal)
-    (subst : List (Nat × Sat.PB.SubstVal)) : VeriPB.ScopeKind → Option (List Constr)
+    (subst : List (Nat × Sat.PB.SubstVal)) : PBCatcher.ScopeKind → Option (List Constr)
   | .leq => some (O.spec.map (substGoal (Sat.PB.Dominance.sigmaLeq O z subst)))
   | .geq => some (O.spec.map (substGoal (Sat.PB.Dominance.sigmaGeq O z subst)))
 
@@ -1110,7 +1110,7 @@ def domScopePrem (O : Sat.PB.Dominance.OrderData) (z : List Sat.PB.Literal)
 true by a complementary pair, proved with compatible provenance, or implied
 by `¬C` (CakePB `check_hash_goals`). -/
 def domHashCovered (nC : Constr)
-    (proved : List (String × Constr × Option VeriPB.ScopeKind))
+    (proved : List (String × Constr × Option PBCatcher.ScopeKind))
     (gid : String) (G : Constr) : Bool :=
   trivialByPair G ||
     proved.any (fun p => p.1 == gid && provLeqOk p.2.2 && constrMatchNorm G p.2.1) ||
@@ -1118,7 +1118,7 @@ def domHashCovered (nC : Constr)
 
 /-- The order goals `#j, #j+1, ...` are discharged. -/
 def domOrderGoalsCovered (nC : Constr)
-    (proved : List (String × Constr × Option VeriPB.ScopeKind)) :
+    (proved : List (String × Constr × Option PBCatcher.ScopeKind)) :
     Nat → List Constr → Bool
   | _, [] => true
   | j, G :: gs => domHashCovered nC proved ("#" ++ toString j) G &&
@@ -1127,7 +1127,7 @@ def domOrderGoalsCovered (nC : Constr)
 /-- The objective goal `gid` is discharged (no goal when `ω` does not touch
 the objective). -/
 def domObjCovered (subst : List (Nat × Sat.PB.SubstVal)) (nC : Constr)
-    (obj : Objective) (proved : List (String × Constr × Option VeriPB.ScopeKind))
+    (obj : Objective) (proved : List (String × Constr × Option PBCatcher.ScopeKind))
     (gid : String) : Bool :=
   !Sat.PB.termsAffected subst obj || domHashCovered nC proved gid (objGoalConstr subst obj)
 
@@ -1143,11 +1143,11 @@ provenance: equality with a proved goal counts only for goals of core ids
 (`goalDb`) proved outside any scope or in `scope leq`. -/
 def dbGoalCoveredDom (subst : List (Nat × Sat.PB.SubstVal)) (nC : Constr)
     (goalDb lookupDb : Std.HashMap Nat Constr)
-    (proved : List (String × Constr × Option VeriPB.ScopeKind)) (D : Constr) : Bool :=
+    (proved : List (String × Constr × Option PBCatcher.ScopeKind)) (D : Constr) : Bool :=
   touchedSatisfied subst D.terms ||
     (let G := substGoal subst D
      trivialByPair G ||
-     impliesSyntactic (VeriPB.normalizeConstr D) G ||
+     impliesSyntactic (PBCatcher.normalizeConstr D) G ||
      impliesSyntactic nC G ||
      proved.any (fun p => provLeqOk p.2.2 && idInDb goalDb p.1 &&
        constrMatchNorm G p.2.1) ||
@@ -1169,7 +1169,7 @@ def untouchedOrder (z : List Sat.PB.Literal) (subst : List (Nat × Sat.PB.SubstV
   z.all fun l => (Sat.PB.lookupSubst subst l.var).isNone
 
 /-- Some item of a subproof is a `scope` block (CakePB `has_scope`). -/
-def hasScope (items : List VeriPB.ProofStep) : Bool :=
+def hasScope (items : List PBCatcher.ProofStep) : Bool :=
   items.any fun i => match i with
     | .scope _ _ => true
     | _ => false
@@ -1198,13 +1198,13 @@ def redOrdGoalOf (O : Sat.PB.Dominance.OrderData) (z : List Sat.PB.Literal)
 /-- Premises of the scopes of a `red` subproof under a loaded order:
 `Spec[σ≤]` for `scope leq`; `scope geq` is rejected (CakePB `mk_scope`). -/
 def redScopePrem (O : Sat.PB.Dominance.OrderData) (z : List Sat.PB.Literal)
-    (subst : List (Nat × Sat.PB.SubstVal)) : VeriPB.ScopeKind → Option (List Constr)
+    (subst : List (Nat × Sat.PB.SubstVal)) : PBCatcher.ScopeKind → Option (List Constr)
   | .leq => some (O.spec.map (substGoal (Sat.PB.Dominance.sigmaLeq O z subst)))
   | .geq => none
 
 /-- The proved goals that count for a `leq`-restricted goal, without their
 provenance (the database goals of `red` reuse `dbGoalCovered`). -/
-def leqProved (proved : List (String × Constr × Option VeriPB.ScopeKind)) :
+def leqProved (proved : List (String × Constr × Option PBCatcher.ScopeKind)) :
     List (String × Constr) :=
   proved.filterMap fun p => if provLeqOk p.2.2 then some (p.1, p.2.1) else none
 
@@ -1212,7 +1212,7 @@ def leqProved (proved : List (String × Constr × Option VeriPB.ScopeKind)) :
 (both forms), checked deletion with a subproof, `obju` and `def_order`
 consume one unit; `proofgoal` and `scope` blocks run at the level of their
 subproof. -/
-partial def pbcDepth : List VeriPB.ProofStep → Nat
+partial def pbcDepth : List PBCatcher.ProofStep → Nat
   | [] => 0
   | .pbc _ inner _ :: rest =>
     max (1 + pbcDepth inner.toList) (pbcDepth rest)
@@ -1239,4 +1239,4 @@ partial def pbcDepth : List VeriPB.ProofStep → Nat
     max (1 + pbcDepth inner) (pbcDepth rest)
   | _ :: rest => pbcDepth rest
 
-end VeriPB.Reflect
+end PBCatcher.Reflect

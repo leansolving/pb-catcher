@@ -3,13 +3,13 @@ Copyright (c) 2026 Stefan Szeider. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 Authors: Stefan Szeider
 -/
-import VeriPB.Tactic.Sat.ReflectFast
-import VeriPB.Tactic.Sat.Tests.Normalize
+import PBCatcher.ReflectFast
+import PBCatcher.Tests.Normalize
 
 /-!
 # Fast constraint operations: exactness test
 
-The fast checker (`VeriPB.Reflect.Fast`) keeps structural knowledge about
+The fast checker (`PBCatcher.Reflect.Fast`) keeps structural knowledge about
 each constraint (`FConstr.split`: a normalized block, or two blocks) and
 uses it to pick cheaper exact normalization paths. This test applies random
 sequences of the pol operations (add, multiply, divide, saturate, weaken,
@@ -23,9 +23,9 @@ also compares the verified and the fast `rup` check on random databases
 cases of `Tests/data/polcut/parity.tsv` (`runParity`).
 -/
 
-namespace VeriPB.Tests.FastConstr
+namespace PBCatcher.Tests.FastConstr
 
-open Sat.PB VeriPB.Reflect.Fast VeriPB.Tests.Normalize
+open Sat.PB PBCatcher.Reflect.Fast PBCatcher.Tests.Normalize
 
 /-- Reference: the verified data-level operations, with the verbatim copy of
 the verified normalizer. -/
@@ -45,22 +45,22 @@ def step (r : Rng) (pool : Array (Constr × FConstr)) (f : FConstr) (c : Constr)
   | 0 =>
     let (k, r2) := r.below pool.size; r := r2
     let (pc, pf) := pool[k]!
-    return (some (addFConstrs f pf, VeriPB.addConstrs c pc), r)
+    return (some (addFConstrs f pf, PBCatcher.addConstrs c pc), r)
   | 1 =>
     let (k, r2) := r.below 4; r := r2
-    return (some (mulFConstr f k, VeriPB.mulConstr c k), r)
+    return (some (mulFConstr f k, PBCatcher.mulConstr c k), r)
   | 2 =>
     let (k, r2) := r.below 3; r := r2
     let k := k + 1
     return (some (divFConstr (normalizeFConstr f) k,
-      VeriPB.divConstr (refNormalize c) k), r)
+      PBCatcher.divConstr (refNormalize c) k), r)
   | 3 =>
     return (some (saturateFConstr (normalizeFConstr f),
-      VeriPB.saturateConstr (refNormalize c)), r)
+      PBCatcher.saturateConstr (refNormalize c)), r)
   | 4 =>
     let (v, r2) := r.below 5; r := r2
     return (some (weakenFConstr (normalizeFConstr f) v,
-      VeriPB.weakenConstr (refNormalize c) v), r)
+      PBCatcher.weakenConstr (refNormalize c) v), r)
   | 5 =>
     return (some (f.negate, refNegate c), r)
   | 7 | 8 | 9 =>
@@ -144,13 +144,13 @@ def runRup (seed : UInt64) (rounds : Nat) : IO Unit := do
       fdb := fdb.insert (i + 1) (toFConstr c)
     let (t, r2) := randConstr r nv 3 3 3; r := r2
     let (nh, r3) := r.below 6; r := r3
-    let mut hints : List VeriPB.RupHint := []
+    let mut hints : List PBCatcher.RupHint := []
     for _ in [:nh] do
       let (k, r') := r.below (m + 3); r := r'
       hints := (if k == 0 then .negC else .id k) :: hints
     let (nvSel, r4) := r.below 3; r := r4
     let numVars := if nvSel == 0 then 2 else nv
-    let ok := VeriPB.Reflect.verifyRupBool (VeriPB.Reflect.rupNegate t) hints db numVars
+    let ok := PBCatcher.Reflect.verifyRupBool (PBCatcher.Reflect.rupNegate t) hints db numVars
     let okF := verifyFRupBool (rupNegateF (toFConstr t)) hints fdb numVars
     if ok != okF then
       throw <| IO.userError s!"rup mismatch (seed {seed}): verified {ok}, fast {okF}, \
@@ -195,16 +195,16 @@ def runCuts (seed : UInt64) (rounds : Nat) : IO Unit := do
     let (c, r1) := randConstr r nv 9 20 6; r := r1
     let (k0, r2) := r.below 9; r := r2
     let (opSel, r3) := r.below 3; r := r3
-    let op : VeriPB.PolOp :=
+    let op : PBCatcher.PolOp :=
       if opSel == 0 then .divVar else if opSel == 1 then .mir else .mirVar
     let db : Std.HashMap Nat Constr := ({} : Std.HashMap Nat Constr).insert 1 c
     let fdb : Std.HashMap Nat FConstr := ({} : Std.HashMap Nat FConstr).insert 1 (toFConstr c)
     -- k = 0 is rejected
-    if (VeriPB.Reflect.execPolRPNBool [.pushId 1, .pushNat 0, op] db).isSome ||
+    if (PBCatcher.Reflect.execPolRPNBool [.pushId 1, .pushNat 0, op] db).isSome ||
         (execFPolRPNBool [.pushId 1, .pushNat 0, op] fdb).isSome then
       throw <| IO.userError s!"cut with k = 0 accepted (seed {seed})"
-    let ops : List VeriPB.PolOp := [.pushId 1, .pushNat (k0 + 1), op]
-    match VeriPB.Reflect.execPolRPNBool ops db, execFPolRPNBool ops fdb with
+    let ops : List PBCatcher.PolOp := [.pushId 1, .pushNat (k0 + 1), op]
+    match PBCatcher.Reflect.execPolRPNBool ops db, execFPolRPNBool ops fdb with
     | some rc, some fc =>
       if !eqConstr rc (fromFConstr fc) then
         throw <| IO.userError s!"cut mismatch (seed {seed}, k {k0 + 1}, {repr op}): \
@@ -250,7 +250,7 @@ def runParity (path : String) : IO Unit := do
     | [opk, ts, d, ets, ed] =>
       let (op, k) ← match opk.splitOn " " with
         | [o, k] =>
-          let op : Option VeriPB.PolOp :=
+          let op : Option PBCatcher.PolOp :=
             if o == "c" then some .divVar else if o == "n" then some .mir
             else if o == "m" then some .mirVar else none
           match op, k.toNat? with
@@ -266,12 +266,12 @@ def runParity (path : String) : IO Unit := do
       if ed < 0 then clamped := clamped + 1
       let db : Std.HashMap Nat Constr := ({} : Std.HashMap Nat Constr).insert 1 c
       let fdb : Std.HashMap Nat FConstr := ({} : Std.HashMap Nat FConstr).insert 1 (toFConstr c)
-      let ops : List VeriPB.PolOp := [.pushId 1, .pushNat k, op]
-      match VeriPB.Reflect.execPolRPNBool ops db, execFPolRPNBool ops fdb with
+      let ops : List PBCatcher.PolOp := [.pushId 1, .pushNat k, op]
+      match PBCatcher.Reflect.execPolRPNBool ops db, execFPolRPNBool ops fdb with
       | some rc, some fc =>
         if !eqConstr rc expected then fail s!"verified {repr rc}"
         if !eqConstr (fromFConstr fc) expected then fail s!"fast {repr (fromFConstr fc)}"
-        if !eqConstr (VeriPB.normalizeConstr rc) rc then fail "result not normalized"
+        if !eqConstr (PBCatcher.normalizeConstr rc) rc then fail "result not normalized"
       | _, _ => fail "rejected"
       n := n + 1
     | _ => fail "malformed line"
@@ -279,9 +279,9 @@ def runParity (path : String) : IO Unit := do
   IO.println s!"pol cuts c/n/m: {n} reference cases equal to CakePB/VeriPB \
     ({clamped} with a negative CakePB degree, truncated to 0)"
 
-end VeriPB.Tests.FastConstr
+end PBCatcher.Tests.FastConstr
 
-open VeriPB.Tests.FastConstr in
+open PBCatcher.Tests.FastConstr in
 #eval show IO Unit from do
   runSeq 11 800 12
   runSeq 12 800 20
@@ -290,4 +290,4 @@ open VeriPB.Tests.FastConstr in
   runRup 22 20000
   runCuts 31 10000
   runCuts 32 10000
-  runParity "VeriPB/Tactic/Sat/Tests/data/polcut/parity.tsv"
+  runParity "PBCatcher/Tests/data/polcut/parity.tsv"

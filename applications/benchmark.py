@@ -42,14 +42,14 @@ VERIBP_DIR = os.path.dirname(SCRIPT_DIR)
 def dynlib_args():
     """`--load-dynlib` flag for the precompiled checker library.
 
-    `lake build` passes `libveripb_VeriPBReflect` (the shared library of the
-    `VeriPBReflect` lib) to every module that imports the checker; a plain
+    `lake build` passes `libPBCatcher_PBCatcherReflect` (the shared library of the
+    `PBCatcherReflect` lib) to every module that imports the checker; a plain
     `lake env lean <file>` does not, and then the checker runs in the IR
     interpreter (about 20x slower, e.g. 157 s instead of 9 s on Paley(101)
     with v0.3.1)."""
     libdir = os.path.join(VERIBP_DIR, ".lake", "build", "lib")
     for ext in ("dylib", "so"):
-        lib = os.path.join(libdir, f"libveripb_VeriPBReflect.{ext}")
+        lib = os.path.join(libdir, f"libPBCatcher_PBCatcherReflect.{ext}")
         if os.path.exists(lib):
             return [f"--load-dynlib={lib}"]
     sys.stderr.write("warning: precompiled checker library missing; "
@@ -303,7 +303,7 @@ def main():
             l = proof_lines(inst['kernel'])
 
             lean_code = (
-                'import VeriPB.Tactic.Sat.Reflect\n'
+                'import PBCatcher.Reflect\n'
                 f'veripb_reflect bench\n'
                 f'  "{inst["opb"]}"\n'
                 f'  "{inst["kernel"]}"\n'
@@ -317,7 +317,7 @@ def main():
             direct_str = ''
             if args.direct:
                 direct_lean = (
-                    'import VeriPB.Tactic.Sat.FromVeriPB\n'
+                    'import PBCatcher.FromVeriPB\n'
                     f'opb_veripb_file bench\n'
                     f'  "{inst["opb"]}"\n'
                     f'  "{inst["kernel"]}"\n'
@@ -370,7 +370,7 @@ def main():
             l = proof_lines(kernel)
 
             lean_code = (
-                'import VeriPB.Tactic.Sat.Reflect\n'
+                'import PBCatcher.Reflect\n'
                 'set_option maxRecDepth 200000\n'
                 'set_option maxHeartbeats 800000\n'
                 f'veripb_reflect bench\n'
@@ -386,7 +386,7 @@ def main():
             direct_str = ''
             if args.direct:
                 direct_lean = (
-                    'import VeriPB.Tactic.Sat.FromVeriPB\n'
+                    'import PBCatcher.FromVeriPB\n'
                     f'opb_veripb_file bench\n'
                     f'  "{opb}"\n'
                     f'  "{kernel}"\n'
@@ -424,7 +424,7 @@ def main():
                 continue
 
             lean_code = (
-                'import VeriPB.Tactic.Sat.Reflect\n'
+                'import PBCatcher.Reflect\n'
                 'set_option maxRecDepth 200000\n'
                 'set_option maxHeartbeats 800000\n'
                 f'veripb_reflect bench\n'

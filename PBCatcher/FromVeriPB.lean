@@ -5,7 +5,7 @@ Authors: Stefan Szeider
 -/
 import Lean
 import Std
-import VeriPB.Tactic.Sat.PseudoBoolean
+import PBCatcher.PseudoBoolean
 
 /-!
 # VeriPB Proof Verification
@@ -37,16 +37,16 @@ downstream converters (`opbLitToPB`, `parseSubstPairs`) only see `x<N>`.
 
 ## Main definitions
 
-* `VeriPB.parseDimacs` — DIMACS CNF parser
-* `VeriPB.parseOPBNamed` / `VeriPB.parseOPB` — OPB parser
-* `VeriPB.parseVeriPBProofWith` / `VeriPB.parseVeriPBProof` — kernel proof parser
+* `PBCatcher.parseDimacs` — DIMACS CNF parser
+* `PBCatcher.parseOPBNamed` / `PBCatcher.parseOPB` — OPB parser
+* `PBCatcher.parseVeriPBProofWith` / `PBCatcher.parseVeriPBProof` — kernel proof parser
 * `veripb_proof` — command that registers a kernel-verified theorem
 * `from_veripb` — term elaborator for inline CNF/proof strings
 * `veripb_proof_file` — command that loads CNF/proof from files
 * `from_veripb_file` — term elaborator with file loading
 -/
 
-namespace VeriPB
+namespace PBCatcher
 
 /-! ### Variable table -/
 
@@ -2954,4 +2954,4 @@ elab "opb_veripb_file " n:ident ppSpace
     Lean.logInfo m!"Registered {name} (OPB: {inst.numVars} vars, \
       {inst.constrs.size} constraints, fully verified)"
 
-end VeriPB
+end PBCatcher

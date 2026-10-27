@@ -3,13 +3,13 @@ Copyright (c) 2026 Stefan Szeider. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 Authors: Stefan Szeider
 -/
-import VeriPB.Tactic.Sat.ReflectCheck
+import PBCatcher.ReflectCheck
 
 /-!
 # Fast reflection checker (runtime replacement)
 
 Runtime implementation of the verified reflection checker
-(`VeriPB.Reflect.checkProofBool`, see `Reflect.lean`), installed via
+(`PBCatcher.Reflect.checkProofBool`, see `Reflect.lean`), installed via
 `@[implemented_by Fast.checkProofBoolFast]`. Nothing in this file is used
 by any proof.
 
@@ -19,7 +19,7 @@ returns `true`; the code here must therefore accept exactly the proofs the
 verified definition accepts. Every operation below mirrors its verified
 counterpart in `ReflectCheck.lean` step by step, including term order:
 normalization happens at the same points, produces the same term order
-(`VeriPB.normalizeArrays` is an exact simulation of `VeriPB.normalizeConstr`),
+(`PBCatcher.normalizeArrays` is an exact simulation of `PBCatcher.normalizeConstr`),
 weakening normalizes and then removes every term of the variable, and RUP
 propagation makes the same single pass over the same hint constraints.
 
@@ -29,14 +29,14 @@ fields: coefficients and literal codes (`2*v` for `x_v`, `2*v+1` for
 avoids the per-term heap objects of `List (Nat × Literal)`.
 -/
 
-namespace VeriPB.Reflect.Fast
+namespace PBCatcher.Reflect.Fast
 
 /-- Literal code of a `Sat.PB.Literal` (`2*v` positive, `2*v+1` negative): the
-encoding `VeriPB.normalizeArrays` is specified against. -/
-abbrev encLit : Sat.PB.Literal → Nat := VeriPB.litCode
+encoding `PBCatcher.normalizeArrays` is specified against. -/
+abbrev encLit : Sat.PB.Literal → Nat := PBCatcher.litCode
 
 /-- Inverse of `encLit`. -/
-abbrev decLit : Nat → Sat.PB.Literal := VeriPB.litOfCode
+abbrev decLit : Nat → Sat.PB.Literal := PBCatcher.litOfCode
 
 /-- Constraint `Σ coeffs[i] * lit(lits[i]) ≥ degree` in parallel-array form.
 
@@ -148,7 +148,7 @@ def FConstr.negateWith (c : FConstr) (cs : Nat) : FConstr :=
 def FConstr.negate (c : FConstr) : FConstr :=
   c.negateWith c.coeffSum
 
-/-- Second half of `rupNegateF` (mirrors `VeriPB.Reflect.rupNegate`) on an
+/-- Second half of `rupNegateF` (mirrors `PBCatcher.Reflect.rupNegate`) on an
 already normalized constraint: negate, or the negated terms with degree `0`
 when the target is contradictory on its own. -/
 def rupNegateWith (nf : FConstr) : FConstr :=
@@ -156,7 +156,7 @@ def rupNegateWith (nf : FConstr) : FConstr :=
   if nf.degree ≤ cs then nf.negateWith cs
   else ⟨nf.coeffs, nf.lits.map (· ^^^ 1), 0, nf.split⟩
 
-/-- Concatenation (mirrors `VeriPB.addConstrs`). Two blocks give a two-block
+/-- Concatenation (mirrors `PBCatcher.addConstrs`). Two blocks give a two-block
 constraint; anything else loses the structure. -/
 def addFConstrs (c1 c2 : FConstr) : FConstr :=
   let n1 := c1.coeffs.size
@@ -188,7 +188,7 @@ def saturateFConstr (c : FConstr) : FConstr :=
 
 /-- Remove every term of variable `varIdx` and subtract the removed
 coefficients from the degree, truncated at 0 (mirrors
-`VeriPB.weakenConstr`; the caller normalizes first, as the verified
+`PBCatcher.weakenConstr`; the caller normalizes first, as the verified
 `execPolOne` does). Removing terms from a block leaves a block, so the
 structural flag is adjusted rather than dropped. -/
 def weakenFConstr (c : FConstr) (varIdx : Nat) : FConstr := Id.run do
@@ -262,16 +262,16 @@ def mirVarFConstr (c : FConstr) (k : Nat) : FConstr := Id.run do
       cs := cs.push (Sat.PB.mirF k r a)
   return stripZeroF c cs (Sat.PB.mirF k r d - mins)
 
-/-- General exact normalization through `VeriPB.normalizeArraysCore`; the
+/-- General exact normalization through `PBCatcher.normalizeArraysCore`; the
 result is flagged as a block when the one-pass path completed. -/
 def normalizeGeneralF (c : FConstr) : FConstr :=
-  let (cs, ls, d, isBlk) := VeriPB.normalizeArraysCore c.coeffs c.lits c.degree
+  let (cs, ls, d, isBlk) := PBCatcher.normalizeArraysCore c.coeffs c.lits c.degree
   ⟨cs, ls, d, if isBlk then cs.size else blockOf cs ls⟩
 
 /-- Exact normalization of a two-block constraint (see `FConstr.split`).
 
 On `c1 ++ c2` with both parts blocks, the verified normalizer
-(`VeriPB.normalizeConstr`) proceeds as follows: for each term of `c1` in
+(`PBCatcher.normalizeConstr`) proceeds as follows: for each term of `c1` in
 order, its only possible complement is the unique term of `c2` with the
 opposite literal; if `min ≤ degree` the pair is cancelled and the degree
 reduced, otherwise the process is blocked (handled by the general
@@ -279,7 +279,7 @@ algorithm). No term of `c2` has a complement after it. Then like terms are
 merged into their first occurrence, i.e. each `c2` term whose literal occurs
 in `c1` is added to that `c1` term. The result lists the surviving `c1`
 terms in order, then the surviving `c2` terms in order. A blocked pair, or
-sparse literal codes, fall back to `VeriPB.normalizeArraysCore` on the
+sparse literal codes, fall back to `PBCatcher.normalizeArraysCore` on the
 unmodified constraint; partial cancellations are discarded. -/
 def normalizeTwoBlocks (c : FConstr) : FConstr := Id.run do
   let n := c.coeffs.size
@@ -329,16 +329,16 @@ def normalizeTwoBlocks (c : FConstr) : FConstr := Id.run do
       outL := outL.push c.lits[j]!
   return ⟨outC, outL, deg, outC.size⟩
 
-/-- Exact simulation of `VeriPB.normalizeConstr`, dispatching on the known
+/-- Exact simulation of `PBCatcher.normalizeConstr`, dispatching on the known
 structure: identity on a block, linear merge for two blocks, otherwise the
-general algorithm `VeriPB.normalizeArraysCore`. -/
+general algorithm `PBCatcher.normalizeArraysCore`. -/
 def normalizeFConstr (c : FConstr) : FConstr :=
   let n := c.coeffs.size
   if c.split == 0 || n == 0 then normalizeGeneralF c
   else if c.split == n then c
   else normalizeTwoBlocks c
 
-/-- Mirrors `VeriPB.Reflect.rupNegate`. -/
+/-- Mirrors `PBCatcher.Reflect.rupNegate`. -/
 def rupNegateF (c : FConstr) : FConstr :=
   rupNegateWith (normalizeFConstr c)
 
@@ -349,14 +349,14 @@ inductive FStackElem where
   | nat : Nat → FStackElem
 
 def execFPolOne (db : Std.HashMap Nat FConstr)
-    (stack : List FStackElem) (op : VeriPB.PolOp) :
+    (stack : List FStackElem) (op : PBCatcher.PolOp) :
     Option (List FStackElem) :=
   match op with
   | .pushId id => match db[id]? with
     | some c => some (.constr c :: stack)
     | none => none
   | .pushNat n => some (.nat n :: stack)
-  | .pushLitAxiom lit => match VeriPB.opbLitToPB lit with
+  | .pushLitAxiom lit => match PBCatcher.opbLitToPB lit with
     | .ok pbLit => some (.constr ⟨#[1], #[encLit pbLit], 0, 1⟩ :: stack)
     | .error _ => none
   | .add => match stack with
@@ -409,14 +409,14 @@ def execFPolOne (db : Std.HashMap Nat FConstr)
     | _ => none
 
 def execFPolOps (db : Std.HashMap Nat FConstr) :
-    List VeriPB.PolOp → List FStackElem → Option (List FStackElem)
+    List PBCatcher.PolOp → List FStackElem → Option (List FStackElem)
   | [], stack => some stack
   | op :: rest, stack =>
     match execFPolOne db stack op with
     | some s => execFPolOps db rest s
     | none => none
 
-def execFPolRPNBool (ops : List VeriPB.PolOp)
+def execFPolRPNBool (ops : List PBCatcher.PolOp)
     (db : Std.HashMap Nat FConstr) : Option FConstr :=
   match execFPolOps db ops [] with
   | some [.constr c] => some c
@@ -424,7 +424,7 @@ def execFPolRPNBool (ops : List VeriPB.PolOp)
 
 /-! ### RUP verification (unit propagation)
 
-Mirrors `VeriPB.Reflect.verifyRupBool`: the same resolved hint list in the
+Mirrors `PBCatcher.Reflect.verifyRupBool`: the same resolved hint list in the
 same order (no implicit `~`, all ids resolved first), the same assignment
 size `varBound hs`, ONE pass over the hints, the same slack, and within a
 constraint the same forced literals applied in term order. The accepted set
@@ -494,7 +494,7 @@ def rupConflictF (hs : Array FConstr) (n : Nat) : Bool := Id.run do
   return false
 
 /-- Mirrors `resolveHints`: `none` if an id is not in the database. -/
-def rupFHintConstrs (negConstr : FConstr) (hints : List VeriPB.RupHint)
+def rupFHintConstrs (negConstr : FConstr) (hints : List PBCatcher.RupHint)
     (db : Std.HashMap Nat FConstr) : Option (Array FConstr) := Id.run do
   let mut arr : Array FConstr := Array.mkEmpty hints.length
   for h in hints do
@@ -507,7 +507,7 @@ def rupFHintConstrs (negConstr : FConstr) (hints : List VeriPB.RupHint)
 
 /-- Mirrors `verifyRupBool` (`numVars` is unused). -/
 def verifyFRupBool (negConstr : FConstr)
-    (hints : List VeriPB.RupHint) (db : Std.HashMap Nat FConstr)
+    (hints : List PBCatcher.RupHint) (db : Std.HashMap Nat FConstr)
     (_numVars : Nat) : Bool :=
   match rupFHintConstrs negConstr hints db with
   | none => false
@@ -577,8 +577,8 @@ def impliesSyntacticF (S T : FConstr) : Bool := Id.run do
 `solValuation` stored as the hash set of the variables whose positive
 literal is listed (a variable is true iff it is in the set). -/
 def checkSolutionValsF (F : Array Constr) (obj curObj : Objective)
-    (lits : List VeriPB.OPBLit) : Option (Nat × Nat) :=
-  match lits.mapM VeriPB.opbLitToPB with
+    (lits : List PBCatcher.OPBLit) : Option (Nat × Nat) :=
+  match lits.mapM PBCatcher.opbLitToPB with
   | .error _ => none
   | .ok pl =>
     let trueVars : Std.HashSet Nat := pl.foldl (fun s l => match l with
@@ -711,18 +711,18 @@ def dbGoalsCoveredF (subst : List (Nat × Sat.PB.SubstVal)) (nC : Constr)
         let D := fromFConstr c
         let G := substGoal subst D
         let ok := trivialByPair G ||
-          impliesSyntactic (VeriPB.normalizeConstr D) G ||
+          impliesSyntactic (PBCatcher.normalizeConstr D) G ||
            impliesSyntactic nC G ||
           proved.any (fun p => !p.1.startsWith "#" && constrMatchNorm G p.2) ||
-          inDbIdx nidx lookupDb (VeriPB.normalizeConstr G)
+          inDbIdx nidx lookupDb (PBCatcher.normalizeConstr G)
         if !ok then return false
   return true
 
 /-- Mirrors `processRedItems`. -/
 def processFRedItems
-    (execFn : FBoolCheckState → List VeriPB.ProofStep → Option FBoolCheckState)
+    (execFn : FBoolCheckState → List PBCatcher.ProofStep → Option FBoolCheckState)
     (goalOf : String → Option Constr) :
-    FBoolCheckState → List VeriPB.ProofStep → List (String × Constr) →
+    FBoolCheckState → List PBCatcher.ProofStep → List (String × Constr) →
       Option (FBoolCheckState × List (String × Constr))
   | st, [], proved => some (st, proved)
   | st, item :: rest, proved =>
@@ -754,11 +754,11 @@ def processFRedItems
 
 /-- Mirrors `checkRedundance`. -/
 def checkFRedundance
-    (execFn : FBoolCheckState → List VeriPB.ProofStep → Option FBoolCheckState)
+    (execFn : FBoolCheckState → List PBCatcher.ProofStep → Option FBoolCheckState)
     (st0 : FBoolCheckState) (goalDb lookupDb : Std.HashMap Nat FConstr)
     (goalOk : Nat → Bool)
     (subst : List (Nat × Sat.PB.SubstVal)) (C : Constr)
-    (items : List VeriPB.ProofStep) (qedHint : Option Nat) : Option Nat :=
+    (items : List PBCatcher.ProofStep) (qedHint : Option Nat) : Option Nat :=
   let nC := rupNegate C
   let st1 := { st0 with
     db := st0.db.insert st0.nextId (rupNegateF (toFConstr C))
@@ -783,13 +783,13 @@ def insertAllF : Std.HashMap Nat FConstr → Nat → List Constr → Std.HashMap
 
 /-- Mirrors `processGoalItems`. -/
 def processFGoalItems
-    (execFn : FBoolCheckState → List VeriPB.ProofStep → Option FBoolCheckState)
+    (execFn : FBoolCheckState → List PBCatcher.ProofStep → Option FBoolCheckState)
     (goalOf : String → Option Constr) (strictId : String → Bool)
-    (strictPrem : List Constr) (cur : Option VeriPB.ScopeKind) :
-    FBoolCheckState → List VeriPB.ProofStep →
-      List (String × Constr × Option VeriPB.ScopeKind) → List (Option VeriPB.ScopeKind) →
-      Option (FBoolCheckState × List (String × Constr × Option VeriPB.ScopeKind) ×
-        List (Option VeriPB.ScopeKind))
+    (strictPrem : List Constr) (cur : Option PBCatcher.ScopeKind) :
+    FBoolCheckState → List PBCatcher.ProofStep →
+      List (String × Constr × Option PBCatcher.ScopeKind) → List (Option PBCatcher.ScopeKind) →
+      Option (FBoolCheckState × List (String × Constr × Option PBCatcher.ScopeKind) ×
+        List (Option PBCatcher.ScopeKind))
   | st, [], proved, contras => some (st, proved, contras)
   | st, item :: rest, proved, contras =>
     match item with
@@ -834,13 +834,13 @@ def processFGoalItems
 
 /-- Mirrors `processScopedItems`. -/
 def processFScopedItems
-    (execFn : FBoolCheckState → List VeriPB.ProofStep → Option FBoolCheckState)
+    (execFn : FBoolCheckState → List PBCatcher.ProofStep → Option FBoolCheckState)
     (goalOf : String → Option Constr) (strictId : String → Bool)
-    (strictPrem : List Constr) (scopePrem : VeriPB.ScopeKind → Option (List Constr)) :
-    FBoolCheckState → List VeriPB.ProofStep →
-      List (String × Constr × Option VeriPB.ScopeKind) → List (Option VeriPB.ScopeKind) →
-      Option (FBoolCheckState × List (String × Constr × Option VeriPB.ScopeKind) ×
-        List (Option VeriPB.ScopeKind))
+    (strictPrem : List Constr) (scopePrem : PBCatcher.ScopeKind → Option (List Constr)) :
+    FBoolCheckState → List PBCatcher.ProofStep →
+      List (String × Constr × Option PBCatcher.ScopeKind) → List (Option PBCatcher.ScopeKind) →
+      Option (FBoolCheckState × List (String × Constr × Option PBCatcher.ScopeKind) ×
+        List (Option PBCatcher.ScopeKind))
   | st, [], proved, contras => some (st, proved, contras)
   | st, item :: rest, proved, contras =>
     match item with
@@ -875,20 +875,20 @@ def domFreshF (A : List Nat) (occ : Std.HashMap Nat (Array Nat))
 
 /-- Mirrors `checkRedOrder`. -/
 def checkFRedOrder
-    (execFn : FBoolCheckState → List VeriPB.ProofStep → Option FBoolCheckState)
+    (execFn : FBoolCheckState → List PBCatcher.ProofStep → Option FBoolCheckState)
     (st0 : FBoolCheckState) (O : Sat.PB.Dominance.OrderData) (z : List Sat.PB.Literal)
     (goalDb lookupDb freshDb : Std.HashMap Nat FConstr) (goalOk : Nat → Bool)
     (subst : List (Nat × Sat.PB.SubstVal)) (C : Constr)
-    (items : List VeriPB.ProofStep) (qedHint : Option Nat) : Option Nat :=
+    (items : List PBCatcher.ProofStep) (qedHint : Option Nat) : Option Nat :=
   if qedHint.isNone && (hasScope items || !untouchedOrder z subst) &&
-      !domFreshF O.aux st0.occIdx freshDb (VeriPB.normalizeConstr C) st0.curObj subst then
+      !domFreshF O.aux st0.occIdx freshDb (PBCatcher.normalizeConstr C) st0.curObj subst then
     none
   else
   let nC := rupNegate C
   let st1 := { st0 with
     db := st0.db.insert st0.nextId (rupNegateF (toFConstr C))
     nextId := st0.nextId + 1 }
-  let sp : VeriPB.ScopeKind → Option (List Constr) :=
+  let sp : PBCatcher.ScopeKind → Option (List Constr) :=
     if hasScope items then redScopePrem O z subst else fun _ => none
   match processFScopedItems execFn
       (redOrdGoalOf O z subst C st0.curObj fun n => (lookupDb[n]?).map fromFConstr)
@@ -911,11 +911,11 @@ def checkFRedOrder
 
 /-- Mirrors `checkRedAny`. -/
 def checkFRedAny
-    (execFn : FBoolCheckState → List VeriPB.ProofStep → Option FBoolCheckState)
+    (execFn : FBoolCheckState → List PBCatcher.ProofStep → Option FBoolCheckState)
     (st0 : FBoolCheckState) (ord : Option (Sat.PB.Dominance.OrderData × List Sat.PB.Literal))
     (goalDb lookupDb freshDb : Std.HashMap Nat FConstr) (goalOk : Nat → Bool)
     (subst : List (Nat × Sat.PB.SubstVal)) (C : Constr)
-    (items : List VeriPB.ProofStep) (qedHint : Option Nat) : Option Nat :=
+    (items : List PBCatcher.ProofStep) (qedHint : Option Nat) : Option Nat :=
   match ord with
   | none => checkFRedundance execFn st0 goalDb lookupDb goalOk subst C items qedHint
   | some (O, z) =>
@@ -923,14 +923,14 @@ def checkFRedAny
 
 /-- Mirrors `redStep`. -/
 def redFStep
-    (execFn : FBoolCheckState → List VeriPB.ProofStep → Option FBoolCheckState)
-    (state : FBoolCheckState) (constr : VeriPB.OPBConstr)
-    (substPairs : List (String × String)) (items : List VeriPB.ProofStep)
+    (execFn : FBoolCheckState → List PBCatcher.ProofStep → Option FBoolCheckState)
+    (state : FBoolCheckState) (constr : PBCatcher.OPBConstr)
+    (substPairs : List (String × String)) (items : List PBCatcher.ProofStep)
     (qedHint : Option Nat) : Option FBoolCheckState :=
-  match VeriPB.opbConstrToPB constr with
+  match PBCatcher.opbConstrToPB constr with
   | .error _ => none
   | .ok C =>
-    match VeriPB.parseSubstPairs substPairs state.numVars with
+    match PBCatcher.parseSubstPairs substPairs state.numVars with
     | .error _ => none
     | .ok subst =>
       -- with `qed : id` neither the database goals nor the freshness test read the indices
@@ -948,18 +948,18 @@ def redFStep
 
 /-- Mirrors `objuStep` (the core database holds `FConstr`s). -/
 def objuFStep
-    (execFn : FBoolCheckState → List VeriPB.ProofStep → Option FBoolCheckState)
-    (state : FBoolCheckState) (kind : VeriPB.ObjUpdateKind)
-    (pobj : VeriPB.ProofObjective) (items : List VeriPB.ProofStep)
+    (execFn : FBoolCheckState → List PBCatcher.ProofStep → Option FBoolCheckState)
+    (state : FBoolCheckState) (kind : PBCatcher.ObjUpdateKind)
+    (pobj : PBCatcher.ProofObjective) (items : List PBCatcher.ProofStep)
     (qedHint : Option Nat) : Option FBoolCheckState :=
   if !state.hasObj || qedHint.isSome then none else
   match proofObjToPB pobj with
   | .error _ => none
   | .ok po =>
     let nw := objuNew kind state.curObj state.curOffset po.1 po.2
-    let G1 := VeriPB.normalizeConstr
+    let G1 := PBCatcher.normalizeConstr
       (objGeqConstr nw.1 nw.2 state.curObj state.curOffset)
-    let G2 := VeriPB.normalizeConstr
+    let G2 := PBCatcher.normalizeConstr
       (objGeqConstr state.curObj state.curOffset nw.1 nw.2)
     let coreDb := state.db.filter fun id _ => state.coreIds.contains id
     match processFRedItems execFn (objuGoalOf G1 G2)
@@ -972,14 +972,14 @@ def objuFStep
 
 /-- Mirrors `delcCheckedStep`. -/
 def delcCheckedFStep
-    (execFn : FBoolCheckState → List VeriPB.ProofStep → Option FBoolCheckState)
+    (execFn : FBoolCheckState → List PBCatcher.ProofStep → Option FBoolCheckState)
     (state : FBoolCheckState) (ids : List Nat)
     (substPairs : List (String × String))
-    (sub : Option (Array VeriPB.ProofStep × Option Nat)) :
+    (sub : Option (Array PBCatcher.ProofStep × Option Nat)) :
     Option FBoolCheckState :=
   match ids, sub with
   | [did], some (items, qedHint) =>
-    match VeriPB.parseSubstPairs substPairs state.numVars with
+    match PBCatcher.parseSubstPairs substPairs state.numVars with
     | .error _ => none
     | .ok subst =>
       if state.s2c && qedHint.isNone then none
@@ -1008,7 +1008,7 @@ def dbGoalsCoveredDomF (subst : List (Nat × Sat.PB.SubstVal)) (nC : Constr)
     (goalDb lookupDb : Std.HashMap Nat FConstr) (goalOk : Nat → Bool)
     (occ : Std.HashMap Nat (Array Nat))
     (nidx : Std.HashMap (Nat × List (Nat × Nat)) (Array Nat))
-    (proved : List (String × Constr × Option VeriPB.ScopeKind)) : Bool := Id.run do
+    (proved : List (String × Constr × Option PBCatcher.ScopeKind)) : Bool := Id.run do
   -- first binding wins, as `lookupSubst`
   let substMap : Std.HashMap Nat Sat.PB.SubstVal :=
     subst.foldl (fun m (v, sv) => if m.contains v then m else m.insert v sv) {}
@@ -1035,23 +1035,23 @@ def dbGoalsCoveredDomF (subst : List (Nat × Sat.PB.SubstVal)) (nC : Constr)
         let D := fromFConstr c
         let G := substGoal subst D
         let ok := trivialByPair G ||
-          impliesSyntactic (VeriPB.normalizeConstr D) G ||
+          impliesSyntactic (PBCatcher.normalizeConstr D) G ||
            impliesSyntactic nC G ||
           proved.any (fun p => provLeqOk p.2.2 &&
             (!p.1.startsWith "#" && match p.1.toNat? with
               | some n => goalDb.contains n && goalOk n
               | none => false) &&
             constrMatchNorm G p.2.1) ||
-          inDbIdx nidx lookupDb (VeriPB.normalizeConstr G)
+          inDbIdx nidx lookupDb (PBCatcher.normalizeConstr G)
         if !ok then return false
   return true
 
 /-- Mirrors `checkDominance`. -/
 def checkFDominance
-    (execFn : FBoolCheckState → List VeriPB.ProofStep → Option FBoolCheckState)
+    (execFn : FBoolCheckState → List PBCatcher.ProofStep → Option FBoolCheckState)
     (st0 : FBoolCheckState) (O : Sat.PB.Dominance.OrderData) (z : List Sat.PB.Literal)
     (subst : List (Nat × Sat.PB.SubstVal)) (C : Constr)
-    (items : List VeriPB.ProofStep) (qedHint : Option Nat) : Option Nat :=
+    (items : List PBCatcher.ProofStep) (qedHint : Option Nat) : Option Nat :=
   let nC := rupNegate C
   let st1 := { st0 with
     db := st0.db.insert st0.nextId (rupNegateF (toFConstr C))
@@ -1077,21 +1077,21 @@ def checkFDominance
 
 /-- Mirrors `domStep`. -/
 def domFStep
-    (execFn : FBoolCheckState → List VeriPB.ProofStep → Option FBoolCheckState)
-    (state : FBoolCheckState) (constr : VeriPB.OPBConstr)
-    (substPairs : List (String × String)) (items : List VeriPB.ProofStep)
+    (execFn : FBoolCheckState → List PBCatcher.ProofStep → Option FBoolCheckState)
+    (state : FBoolCheckState) (constr : PBCatcher.OPBConstr)
+    (substPairs : List (String × String)) (items : List PBCatcher.ProofStep)
     (qedHint : Option Nat) : Option FBoolCheckState :=
   match state.ord with
   | none => none
   | some (O, z) =>
-    match VeriPB.opbConstrToPB constr with
+    match PBCatcher.opbConstrToPB constr with
     | .error _ => none
     | .ok C =>
-      match VeriPB.parseSubstPairs substPairs state.numVars with
+      match PBCatcher.parseSubstPairs substPairs state.numVars with
       | .error _ => none
       | .ok subst =>
         let state := state.extendIdx
-        if !domFreshF O.aux state.occIdx state.db (VeriPB.normalizeConstr C) state.curObj
+        if !domFreshF O.aux state.occIdx state.db (PBCatcher.normalizeConstr C) state.curObj
             subst then
           none
         else
@@ -1127,19 +1127,19 @@ def FBoolCheckState.withLocalDb (state : FBoolCheckState)
 
 /-- Mirrors `checkSpecChain`. -/
 def checkSpecChainF
-    (execFn : FBoolCheckState → List VeriPB.ProofStep → Option FBoolCheckState)
+    (execFn : FBoolCheckState → List PBCatcher.ProofStep → Option FBoolCheckState)
     (aux : List Nat) :
-    FBoolCheckState → List VeriPB.ProofStep →
+    FBoolCheckState → List PBCatcher.ProofStep →
       Option (List (Constr × List (Nat × Sat.PB.SubstVal)))
   | _, [] => some []
   | st, item :: rest =>
     match specRedOf item with
     | none => none
     | some (constr, pairs, items, qedHint) =>
-      match VeriPB.opbConstrToPB constr with
+      match PBCatcher.opbConstrToPB constr with
       | .error _ => none
       | .ok C =>
-        match VeriPB.parseSubstPairs pairs st.numVars with
+        match PBCatcher.parseSubstPairs pairs st.numVars with
         | .error _ => none
         | .ok subst =>
           if !(subst.all fun p => decide (p.1 ∈ aux)) then none
@@ -1153,13 +1153,13 @@ def checkSpecChainF
                   { st with db := st.db.insert fid (normalizeFConstr (toFConstr C))
                             nextId := fid + 1 } rest with
               | none => none
-              | some steps => some ((VeriPB.normalizeConstr C, subst) :: steps)
+              | some steps => some ((PBCatcher.normalizeConstr C, subst) :: steps)
 
 /-- Mirrors `checkOrderProof`. -/
 def checkOrderProofF
-    (execFn : FBoolCheckState → List VeriPB.ProofStep → Option FBoolCheckState)
+    (execFn : FBoolCheckState → List PBCatcher.ProofStep → Option FBoolCheckState)
     (state : FBoolCheckState) (start : Nat) (prem goals : List Constr)
-    (items : List VeriPB.ProofStep) : Option Nat :=
+    (items : List PBCatcher.ProofStep) : Option Nat :=
   match processFRedItems execFn (hashGoalOf goals)
       (state.withLocalDb (mkFDBRec prem start) (start + prem.length)) items [] with
   | none => none
@@ -1168,12 +1168,12 @@ def checkOrderProofF
 
 /-- Mirrors `defOrderStep`. -/
 def defOrderFStep
-    (execFn : FBoolCheckState → List VeriPB.ProofStep → Option FBoolCheckState)
-    (state : FBoolCheckState) (od : VeriPB.OrderDef VeriPB.ProofStep) :
+    (execFn : FBoolCheckState → List PBCatcher.ProofStep → Option FBoolCheckState)
+    (state : FBoolCheckState) (od : PBCatcher.OrderDef PBCatcher.ProofStep) :
     Option FBoolCheckState :=
   match od.transitivity, od.reflexivity with
   | some t, some refl =>
-    match od.defConstrs.mapM VeriPB.opbConstrToPB with
+    match od.defConstrs.mapM PBCatcher.opbConstrToPB with
     | .error _ => none
     | .ok defs0 =>
       match checkSpecChainF execFn od.aux (state.withLocalDb {} 1)
@@ -1182,7 +1182,7 @@ def defOrderFStep
       | some steps =>
         let O : Sat.PB.Dominance.OrderData :=
           { left := od.left, right := od.right, aux := od.aux,
-            spec := steps.map Prod.fst, defs := defs0.map VeriPB.normalizeConstr }
+            spec := steps.map Prod.fst, defs := defs0.map PBCatcher.normalizeConstr }
         if !orderWellFormed O ||
             !transFresh O t.freshRight t.freshAux1 t.freshAux2 then none
         else
@@ -1199,11 +1199,11 @@ def defOrderFStep
 
 /-- Mirrors `loadOrderStep`. -/
 def loadOrderFStep (state : FBoolCheckState) (name : String)
-    (lits : List VeriPB.OPBLit) : Option FBoolCheckState :=
+    (lits : List PBCatcher.OPBLit) : Option FBoolCheckState :=
   match findOrder name state.orders with
   | none => none
   | some O =>
-    match lits.mapM VeriPB.opbLitToPB with
+    match lits.mapM PBCatcher.opbLitToPB with
     | .error _ => none
     | .ok z =>
       if loadOrderOk O z then
@@ -1211,7 +1211,7 @@ def loadOrderFStep (state : FBoolCheckState) (name : String)
       else none
 
 def execFStepsFuel (fuel : Nat) (state : FBoolCheckState)
-    (steps : List VeriPB.ProofStep) : Option FBoolCheckState :=
+    (steps : List PBCatcher.ProofStep) : Option FBoolCheckState :=
   match steps with
   | [] => some state
   | step :: rest =>
@@ -1226,7 +1226,7 @@ def execFStepsFuel (fuel : Nat) (state : FBoolCheckState)
           some { state with db := newDb, nextId := state.nextId + 1 }
         | none => none
       | .rup constr hints =>
-        match VeriPB.opbConstrToPB constr with
+        match PBCatcher.opbConstrToPB constr with
         | .ok pbConstr =>
           let fc := toFConstr pbConstr
           if !verifyFRupBool (rupNegateF fc) hints state.db
@@ -1241,7 +1241,7 @@ def execFStepsFuel (fuel : Nat) (state : FBoolCheckState)
         else match fuel with
         | 0 => none
         | n + 1 =>
-          match VeriPB.opbConstrToPB constr with
+          match PBCatcher.opbConstrToPB constr with
           | .ok pbConstr =>
             let fc := toFConstr pbConstr
             let cs := fc.coeffSum
@@ -1274,7 +1274,7 @@ def execFStepsFuel (fuel : Nat) (state : FBoolCheckState)
           match state.db[pid]? with
           | none => none
           | some S =>
-            match VeriPB.opbConstrToPB constr with
+            match PBCatcher.opbConstrToPB constr with
             | .error _ => none
             | .ok T0 =>
               let T := normalizeFConstr (toFConstr T0)
@@ -1400,9 +1400,9 @@ def FBoolCheckState.conclCtx (s : FBoolCheckState) : ConclCtx :=
     curOffset := s.curOffset, best := s.best, bestWit := s.bestWit,
     chk := s.chk }
 
-/-- Runtime mirror of `VeriPB.Reflect.hasUnsatConclusion` (same footer rule
+/-- Runtime mirror of `PBCatcher.Reflect.hasUnsatConclusion` (same footer rule
 via the shared `lastFooter` and `outputClaimOk`). -/
-def hasFUnsatConclusion (steps : Array VeriPB.ProofStep)
+def hasFUnsatConclusion (steps : Array PBCatcher.ProofStep)
     (state : FBoolCheckState) : Bool :=
   state.best.isNone && match lastFooter steps with
     | some (o, .conclusion id) =>
@@ -1411,11 +1411,11 @@ def hasFUnsatConclusion (steps : Array VeriPB.ProofStep)
         | none => false
     | _ => false
 
-/-- Runtime implementation of `VeriPB.Reflect.checkProofBool`. -/
+/-- Runtime implementation of `PBCatcher.Reflect.checkProofBool`. -/
 def checkProofBoolFast (constrs : Array Constr) (numVars : Nat)
     (objective : Objective) (names : List (String × Nat))
     (proofStr : String) : Bool :=
-  match VeriPB.parseVeriPBProofWith (VeriPB.VarTable.ofList names numVars)
+  match PBCatcher.parseVeriPBProofWith (PBCatcher.VarTable.ofList names numVars)
       proofStr with
   | .error _ => false
   | .ok proofData =>
@@ -1428,13 +1428,13 @@ def checkProofBoolFast (constrs : Array Constr) (numVars : Nat)
       hasFUnsatConclusion proofData.steps finalState
     | none => false
 
-/-- Runtime implementation of `VeriPB.Reflect.proofClaim?`: the fast step
+/-- Runtime implementation of `PBCatcher.Reflect.proofClaim?`: the fast step
 loop, then the shared `conclusionClaim` on the final state (database
 entries converted back with `fromFConstr`). -/
 def proofClaimFast? (constrs : Array Constr) (numVars : Nat)
     (objective : Objective) (offset : Int) (names : List (String × Nat))
     (proofStr : String) : Option Claim :=
-  match VeriPB.parseVeriPBProofWith (VeriPB.VarTable.ofList names numVars)
+  match PBCatcher.parseVeriPBProofWith (PBCatcher.VarTable.ofList names numVars)
       proofStr with
   | .error _ => none
   | .ok proofData =>
@@ -1454,4 +1454,4 @@ def proofClaimFast? (constrs : Array Constr) (numVars : Nat)
       | none => none
     | none => none
 
-end VeriPB.Reflect.Fast
+end PBCatcher.Reflect.Fast

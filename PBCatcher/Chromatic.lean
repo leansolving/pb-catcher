@@ -5,10 +5,10 @@ Authors: Stefan Szeider
 -/
 import Lean
 import Std
-import VeriPB.Tactic.Sat.PseudoBoolean
-import VeriPB.Tactic.Sat.Reflect
-import VeriPB.Tactic.Sat.IndependentSet
-import VeriPB.Tactic.Sat.VertexCover
+import PBCatcher.PseudoBoolean
+import PBCatcher.Reflect
+import PBCatcher.IndependentSet
+import PBCatcher.VertexCover
 
 /-!
 # Trusted Chromatic Number Encoding (optimization form)
@@ -90,7 +90,7 @@ def encodeChrom (g : Graph) (k : Nat) : Array Constr :=
     linkConstrs g.numVerts k).toArray
 
 /-- The objective `Σ_c y_c` (offset 0). -/
-def chromObjective (g : Graph) (k : Nat) : VeriPB.Reflect.Objective :=
+def chromObjective (g : Graph) (k : Nat) : PBCatcher.Reflect.Objective :=
   (List.range k).map fun c => (1, Literal.pos (g.numVerts * k + c))
 
 /-- Number of variables: `n*k` colour variables and `k` usage variables. -/
@@ -140,9 +140,9 @@ theorem linkConstr_mem (g : Graph) (k v a : Nat) (hv : v < g.numVerts) (ha : a <
 
 /-- The OPB value is the number of used colours. -/
 theorem chromObjective_opbVal (g : Graph) (k : Nat) (f : Valuation) :
-    VeriPB.Reflect.opbVal (chromObjective g k) 0 f =
+    PBCatcher.Reflect.opbVal (chromObjective g k) 0 f =
       (countTrue (fun c => f (g.numVerts * k + c)) k : Int) := by
-  simp only [VeriPB.Reflect.opbVal, VeriPB.Reflect.objVal, chromObjective,
+  simp only [PBCatcher.Reflect.opbVal, PBCatcher.Reflect.objVal, chromObjective,
     evalSum_posLits_shift]
   omega
 
@@ -157,7 +157,7 @@ theorem vertexConstr_sat_exists (k v : Nat) (f : Valuation)
 colours `0..u-1` (each used colour is renamed to its rank). -/
 theorem coloring_of_sat (g : Graph) (k : Nat)
     (hedges : ∀ e ∈ g.edges, e.1 < g.numVerts ∧ e.2 < g.numVerts)
-    (ρ : Valuation) (hρ : VeriPB.Reflect.FormulaSat (encodeChrom g k) ρ) :
+    (ρ : Valuation) (hρ : PBCatcher.Reflect.FormulaSat (encodeChrom g k) ρ) :
     hasColoring g (countTrue (fun c => ρ (g.numVerts * k + c)) k) := by
   let y : Nat → Bool := fun c => ρ (g.numVerts * k + c)
   have hpick : ∀ v, ∃ a, v < g.numVerts → a < k ∧ ρ (v * k + a) = true := by
@@ -210,7 +210,7 @@ theorem colorVal_y {n k c' : Nat} (col : Nat → Nat) (a : Nat) :
 theorem colorVal_sat (g : Graph) (k c' : Nat) (col : Nat → Nat)
     (hedges : ∀ e ∈ g.edges, e.1 < g.numVerts ∧ e.2 < g.numVerts)
     (hcol : isProperColoring g c' col) (hck : c' ≤ k) :
-    VeriPB.Reflect.FormulaSat (encodeChrom g k) (colorVal g.numVerts k c' col) := by
+    PBCatcher.Reflect.FormulaSat (encodeChrom g k) (colorVal g.numVerts k c' col) := by
   obtain ⟨hrange, hproper⟩ := hcol
   intro c hc
   rcases (mem_encodeChrom g k c).1 hc with hc | hc | hc
@@ -246,15 +246,15 @@ colours; the solution of the upper bound shows `χ ≤ k`, which covers the
 rest. -/
 theorem chromaticNumber_of_bounds (g : Graph) (k c : Nat)
     (hedges : edgesInRange g = true)
-    (h : VeriPB.Reflect.formulaBounds (encodeChrom g k) (chromObjective g k) 0
+    (h : PBCatcher.Reflect.formulaBounds (encodeChrom g k) (chromObjective g k) 0
       (some (c : Int)) (some (c : Int))) :
     chromaticNumber g c := by
   have hedges := edgesInRange_spec g hedges
   obtain ⟨hlb, hub⟩ := h
   obtain ⟨ρ, hρ, hval⟩ := hub
-  have hv : VeriPB.Reflect.opbVal (chromObjective g k) 0 ρ ≤ (c : Int) := hval
+  have hv : PBCatcher.Reflect.opbVal (chromObjective g k) 0 ρ ≤ (c : Int) := hval
   rw [chromObjective_opbVal] at hv
-  have hv2 : (c : Int) ≤ VeriPB.Reflect.opbVal (chromObjective g k) 0 ρ := hlb ρ hρ
+  have hv2 : (c : Int) ≤ PBCatcher.Reflect.opbVal (chromObjective g k) 0 ρ := hlb ρ hρ
   rw [chromObjective_opbVal] at hv2
   have hle := countTrue_le (fun a => ρ (g.numVerts * k + a)) k
   refine ⟨?_, ?_⟩
@@ -263,7 +263,7 @@ theorem chromaticNumber_of_bounds (g : Graph) (k c : Nat)
   · intro c' ⟨col, hcol⟩
     rcases Nat.lt_or_ge c' k with hck | hck
     · have hs := colorVal_sat g k c' col hedges hcol (by omega)
-      have hl : (c : Int) ≤ VeriPB.Reflect.opbVal (chromObjective g k) 0
+      have hl : (c : Int) ≤ PBCatcher.Reflect.opbVal (chromObjective g k) 0
           (colorVal g.numVerts k c' col) := hlb _ hs
       rw [chromObjective_opbVal] at hl
       have hcount : countTrue (fun a => colorVal g.numVerts k c' col (g.numVerts * k + a)) k
@@ -303,8 +303,8 @@ elab "chromatic_reflect " n:ident ppSpace gExpr:term:max
     let hedgesVal ← whnfD (mkApp (mkConst ``edgesInRange) gVal)
     unless hedgesVal.isConstOf ``Bool.true do
       throwError "chromatic_reflect: an edge of the graph leaves the vertex range 0..n-1"
-    let claim := VeriPB.Reflect.Claim.bounds (some (c : Int)) (some (c : Int))
-    let boundsProof ← VeriPB.Reflect.mkClaimProof `chromatic_reflect
+    let claim := PBCatcher.Reflect.Claim.bounds (some (c : Int)) (some (c : Int))
+    let boundsProof ← PBCatcher.Reflect.mkClaimProof `chromatic_reflect
       constrsExpr numVarsExpr objExpr offsetExpr proofStr claim
       (ref? := some (← getRef))
     let hedgesType := mkApp3 (mkConst ``Eq [.succ .zero]) (mkConst ``Bool)

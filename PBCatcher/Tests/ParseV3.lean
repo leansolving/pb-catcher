@@ -3,7 +3,7 @@ Copyright (c) 2026 Stefan Szeider. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 Authors: Stefan Szeider
 -/
-import VeriPB.Tactic.Sat.Reflect
+import PBCatcher.Reflect
 
 /-!
 # Parser test: VeriPB 3 kernel format
@@ -22,9 +22,9 @@ that the name table reaches the proof parser (`parseOPBNamed` →
 `checkProofBool`).
 -/
 
-namespace VeriPB.Tests.ParseV3
+namespace PBCatcher.Tests.ParseV3
 
-open VeriPB
+open PBCatcher
 
 /-- Statement kinds occurring in a step, including nested subproof items. -/
 partial def kinds (s : ProofStep) : List String :=
@@ -78,7 +78,7 @@ partial def kinds (s : ProofStep) : List String :=
       (match lb with | .finite a => if a < 0 then ["BOUNDS neg"] else [] | .inf => [])
   | .conclusionNone => ["conclusion NONE"]
 
-def dataDir : String := "VeriPB/Tactic/Sat/Tests/data/v3/"
+def dataDir : String := "PBCatcher/Tests/data/v3/"
 
 /-- Parse `name.opb` and `name_kernel.pbp`; return the instance and the proof. -/
 def load (name : String) : IO (OPBInstance × Except String VeriPBProof) := do
@@ -112,9 +112,9 @@ def expectConstrs (name : String) (cs : Array Sat.PB.Constr)
 def parseProof (body : String) : Except String VeriPBProof :=
   parseVeriPBProof s!"pseudo-Boolean proof version 3.0\n{body}end pseudo-Boolean proof ;\n"
 
-end VeriPB.Tests.ParseV3
+end PBCatcher.Tests.ParseV3
 
-open VeriPB VeriPB.Tests.ParseV3 in
+open PBCatcher PBCatcher.Tests.ParseV3 in
 #eval show IO Unit from do
   -- statements
   expectParse "all_diff" ["f", "output NONE"]
@@ -199,7 +199,7 @@ open VeriPB VeriPB.Tests.ParseV3 in
     | .error _ => pure ()
   IO.println "OPB checks passed"
 
-open VeriPB VeriPB.Tests.ParseV3 in
+open PBCatcher PBCatcher.Tests.ParseV3 in
 #eval show IO Unit from do
   -- `conclusion SAT : ;` and `BOUNDS ... ub : ;` carry the all-false
   -- assignment, as in CakePB (`parse_assg [] = SOME []`); VeriPB reads
@@ -241,11 +241,11 @@ open VeriPB VeriPB.Tests.ParseV3 in
     | .error _ => pure ()
   IO.println "parser strictness checks passed"
 
-namespace VeriPB.Tests.ParseV3
+namespace PBCatcher.Tests.ParseV3
 
 -- Named variables `ab`, `cd` (indices 0, 1) in both the OPB and the proof.
 veripb_reflect named_vars_reflect
-  "VeriPB/Tactic/Sat/Tests/data/named_vars.opb"
-  "VeriPB/Tactic/Sat/Tests/data/named_vars_kernel.pbp"
+  "PBCatcher/Tests/data/named_vars.opb"
+  "PBCatcher/Tests/data/named_vars_kernel.pbp"
 
-end VeriPB.Tests.ParseV3
+end PBCatcher.Tests.ParseV3

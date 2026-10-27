@@ -1,29 +1,29 @@
-name = "veripb"
+name = "PBCatcher"
 version = "0.6.0"
-defaultTargets = ["VeriPB"]
+defaultTargets = ["PBCatcher"]
 
 [[lean_lib]]
-name = "VeriPBKernel"
+name = "PBCatcherKernel"
 
 [[lean_lib]]
-name = "VeriPB"
+name = "PBCatcher"
 
 # Precompiled checker: exposes the closed module set of the reflection
 # checker as native code so checkProofBool runs compiled (like bv_decide)
 # instead of interpreted. Declared LAST: Lake resolves module ownership
 # with findSomeRev? (last lib wins), and this lib must own these six
-# modules (Dominance because ReflectCheck imports it); otherwise the VeriPB
+# modules (Dominance because ReflectCheck imports it); otherwise the PBCatcher
 # lib claims them via its root-name prefix and precompilation causes build
-# cycles through VeriPB:shared.
+# cycles through PBCatcher:shared.
 [[lean_lib]]
-name = "VeriPBReflect"
-roots = ["VeriPB.Tactic.Sat.Reflect"]
+name = "PBCatcherReflect"
+roots = ["PBCatcher.Reflect"]
 globs = [
-  "VeriPB.Tactic.Sat.PseudoBoolean",
-  "VeriPB.Tactic.Sat.Dominance",
-  "VeriPB.Tactic.Sat.FromVeriPB",
-  "VeriPB.Tactic.Sat.ReflectCheck",
-  "VeriPB.Tactic.Sat.ReflectFast",
-  "VeriPB.Tactic.Sat.Reflect",
+  "PBCatcher.PseudoBoolean",
+  "PBCatcher.Dominance",
+  "PBCatcher.FromVeriPB",
+  "PBCatcher.ReflectCheck",
+  "PBCatcher.ReflectFast",
+  "PBCatcher.Reflect",
 ]
 precompileModules = true

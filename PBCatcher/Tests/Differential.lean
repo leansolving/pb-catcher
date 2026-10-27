@@ -3,13 +3,13 @@ Copyright (c) 2026 Stefan Szeider. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 Authors: Stefan Szeider
 -/
-import VeriPB.Tactic.Sat.Reflect
+import PBCatcher.Reflect
 
 /-!
 # Fast checker differential test
 
-`VeriPB.Reflect.checkProofBool` (verified, List-based) is replaced at
-runtime by `VeriPB.Reflect.Fast.checkProofBoolFast` via `@[implemented_by]`.
+`PBCatcher.Reflect.checkProofBool` (verified, List-based) is replaced at
+runtime by `PBCatcher.Reflect.Fast.checkProofBoolFast` via `@[implemented_by]`.
 The per-use axioms of `veripb_reflect` assert facts about the verified
 definition, so the fast checker must accept exactly the same proofs. This
 test runs the verified step function `execStepsFuel` and the fast step
@@ -22,9 +22,9 @@ The same harness on the large `applications/` proofs (up to Paley(101),
 62,922 steps) is run before releases; see `applications/difftest.lean`.
 -/
 
-namespace VeriPB.Tests.Differential
+namespace PBCatcher.Tests.Differential
 
-open VeriPB.Reflect
+open PBCatcher.Reflect
 
 def constrEq (a b : Constr) : Bool :=
   a.degree == b.degree && a.terms.length == b.terms.length &&
@@ -83,7 +83,7 @@ def runOneClaim (name opbPath proofPath : String) (fullEvery : Nat := 1)
     IO (Option Claim) := do
   let opbStr ← IO.FS.readFile opbPath
   let proofStr ← IO.FS.readFile proofPath
-  let inst ← match VeriPB.parseOPBNamed opbStr with
+  let inst ← match PBCatcher.parseOPBNamed opbStr with
     | .ok r => pure r
     | .error e => throw (IO.userError s!"{name}: OPB parse error: {e}")
   let obj : Objective := match inst.objective with
@@ -92,8 +92,8 @@ def runOneClaim (name opbPath proofPath : String) (fullEvery : Nat := 1)
   let offset : Int := match inst.objective with
     | some o => o.offset
     | none => 0
-  let proof ← match VeriPB.parseVeriPBProofWith
-      (VeriPB.VarTable.ofList inst.names inst.numVars) proofStr with
+  let proof ← match PBCatcher.parseVeriPBProofWith
+      (PBCatcher.VarTable.ofList inst.names inst.numVars) proofStr with
     | .ok p => pure p
     | .error e => throw (IO.userError s!"{name}: proof parse error: {e}")
   let constrs := inst.constrs
@@ -205,14 +205,14 @@ point `proofClaimFast?`). -/
 def expectParseError (name opbPath proofPath : String) : IO Unit := do
   let opbStr ← IO.FS.readFile opbPath
   let proofStr ← IO.FS.readFile proofPath
-  let inst ← match VeriPB.parseOPBNamed opbStr with
+  let inst ← match PBCatcher.parseOPBNamed opbStr with
     | .ok r => pure r
     | .error e => throw (IO.userError s!"{name}: OPB parse error: {e}")
   let obj : Objective := match inst.objective with
     | some o => o.terms
     | none => []
-  match VeriPB.parseVeriPBProofWith
-      (VeriPB.VarTable.ofList inst.names inst.numVars) proofStr with
+  match PBCatcher.parseVeriPBProofWith
+      (PBCatcher.VarTable.ofList inst.names inst.numVars) proofStr with
   | .ok _ => throw (IO.userError s!"{name}: parsed, expected a parse error")
   | .error e =>
     if (Fast.proofClaimFast? inst.constrs inst.numVars obj 0 inst.names
@@ -220,11 +220,11 @@ def expectParseError (name opbPath proofPath : String) : IO Unit := do
       throw (IO.userError s!"{name}: proofClaimFast? accepts an unparsable proof")
     IO.println s!"{name}: parse error as expected: {e}"
 
-end VeriPB.Tests.Differential
+end PBCatcher.Tests.Differential
 
-open VeriPB.Tests.Differential VeriPB.Reflect in
+open PBCatcher.Tests.Differential PBCatcher.Reflect in
 #eval show IO Unit from do
-  let d := "VeriPB/Tactic/Sat/Tests/data/"
+  let d := "PBCatcher/Tests/data/"
   for n in ["php21", "red_subproof", "red_swap", "red_const", "red_neglit", "red_basic",
       "weaken_cases", "rup_cases", "rup_prop", "dup", "dup_pair", "dup_pbc"] do
     runOne n (d ++ n ++ ".opb") (d ++ n ++ "_kernel.pbp")
@@ -615,9 +615,9 @@ open VeriPB.Tests.Differential VeriPB.Reflect in
 -- in the comments; PBLean agrees with CakePB everywhere except c1_red and
 -- c1_dom (PARITY C1, accept side) and goalid_01_dom, goalid_02_red (PARITY B3,
 -- reject side). lex2 is the 2-bit lex order of Tests/data/dom, lex1 the 1-bit one.
-open VeriPB.Tests.Differential VeriPB.Reflect in
+open PBCatcher.Tests.Differential PBCatcher.Reflect in
 #eval show IO Unit from do
-  let it := "VeriPB/Tactic/Sat/Tests/data/inter/"
+  let it := "PBCatcher/Tests/data/inter/"
   -- (a) soli / obji / sol between doms (lex2 on x1 x3); the soli/obji
   -- constraint is core and gets a core goal in the next dom
   for (o, n, c) in [("wobj4", "soli_dom", Claim.bounds (some 2) (some 2)),  -- core goal 7 proved
@@ -696,9 +696,9 @@ open VeriPB.Tests.Differential VeriPB.Reflect in
 -- repeated witness entries (Tests/data/wit, found by the P3 mutation campaign):
 -- a repeated entry with the same target is accepted (VeriPB and CakePB accept),
 -- a conflicting one is rejected (CakePB rejects, VeriPB keeps the first entry)
-open VeriPB.Tests.Differential VeriPB.Reflect in
+open PBCatcher.Tests.Differential PBCatcher.Reflect in
 #eval show IO Unit from do
-  let w := "VeriPB/Tactic/Sat/Tests/data/wit/"
+  let w := "PBCatcher/Tests/data/wit/"
   runOne "dupwit_red" (w ++ "dupwit.opb") (w ++ "dupwit_red.pbp")
   runOne "dupwit_red_twin" (w ++ "dupwit.opb") (w ++ "dupwit_red_twin.pbp")
   runOne "dupwit_red_conflict" (w ++ "dupwit.opb") (w ++ "dupwit_red_conflict.pbp")

@@ -5,10 +5,10 @@ Authors: Stefan Szeider
 -/
 import Lean
 import Std
-import VeriPB.Tactic.Sat.PseudoBoolean
-import VeriPB.Tactic.Sat.FromVeriPB
-import VeriPB.Tactic.Sat.Reflect
-import VeriPB.Tactic.Sat.IndependentSet
+import PBCatcher.PseudoBoolean
+import PBCatcher.FromVeriPB
+import PBCatcher.Reflect
+import PBCatcher.IndependentSet
 
 /-!
 # Trusted Bin Packing Encoding
@@ -373,18 +373,18 @@ elab "binpack_reflect " nm:ident ppSpace instTerm:term:max ppSpace proofFile:str
     let proofStr ← IO.FS.readFile (System.FilePath.mk proofPath)
     let constrsExpr := mkApp (mkConst ``encode) instExpr
     let proofStrExpr := mkStrLit proofStr
-    let checkExpr := mkApp5 (mkConst ``VeriPB.Reflect.checkProofBool)
+    let checkExpr := mkApp5 (mkConst ``PBCatcher.Reflect.checkProofBool)
       constrsExpr numVarsExpr
-      VeriPB.Reflect.emptyObjectiveExpr VeriPB.Reflect.emptyNamesExpr
+      PBCatcher.Reflect.emptyObjectiveExpr PBCatcher.Reflect.emptyNamesExpr
       proofStrExpr
     let hEqTrue ← match ← Lean.Meta.nativeEqTrue `binpack_reflect checkExpr
         (axiomDeclRange? := (← getRef)) with
       | .success prf => pure prf
       | .notTrue => throwError "Reflection checker returned false for {name}"
     let unsatProof := mkApp6
-      (mkConst ``VeriPB.Reflect.checkProof_sound)
+      (mkConst ``PBCatcher.Reflect.checkProof_sound)
       constrsExpr numVarsExpr
-      VeriPB.Reflect.emptyObjectiveExpr VeriPB.Reflect.emptyNamesExpr
+      PBCatcher.Reflect.emptyObjectiveExpr PBCatcher.Reflect.emptyNamesExpr
       proofStrExpr hEqTrue
     -- Build side-condition proofs via mkDecideProof
     if numBins == 0 then throwError "numBins must be positive"
@@ -471,7 +471,7 @@ def encodeOpt (inst : Instance) : Array Constr :=
     (List.range inst.numBins).map (mkCapOptConstr inst)).toArray
 
 /-- The objective `Σ_j y_j` (offset 0). -/
-def binObjective (inst : Instance) : VeriPB.Reflect.Objective :=
+def binObjective (inst : Instance) : PBCatcher.Reflect.Objective :=
   (List.range inst.numBins).map fun j => (1, Literal.pos (inst.numItems * inst.numBins + j))
 
 /-- Number of variables: `n*m` assignment and `m` usage variables. -/
@@ -561,10 +561,10 @@ theorem capOptConstr_load (inst : Instance) (f : Valuation) (j : Nat)
 
 /-- The OPB value is the number of used bins. -/
 theorem binObjective_opbVal (inst : Instance) (f : Valuation) :
-    VeriPB.Reflect.opbVal (binObjective inst) 0 f =
+    PBCatcher.Reflect.opbVal (binObjective inst) 0 f =
       (IndependentSet.countTrue (fun j => f (inst.numItems * inst.numBins + j))
         inst.numBins : Int) := by
-  simp only [VeriPB.Reflect.opbVal, VeriPB.Reflect.objVal, binObjective,
+  simp only [PBCatcher.Reflect.opbVal, PBCatcher.Reflect.objVal, binObjective,
     OptCount.evalSum_posLits_shift]
   omega
 
@@ -573,7 +573,7 @@ theorem binObjective_opbVal (inst : Instance) (f : Valuation) :
 /-- A solution with `u` used bins yields a packing into `u` bins (each used
 bin is renamed to its rank). -/
 theorem packing_of_sat (inst : Instance) (hpos : ∀ i, i < inst.numItems → 0 < inst.sizes[i]!)
-    (ρ : Valuation) (hρ : VeriPB.Reflect.FormulaSat (encodeOpt inst) ρ) :
+    (ρ : Valuation) (hρ : PBCatcher.Reflect.FormulaSat (encodeOpt inst) ρ) :
     hasPacking (inst.withBins
       (IndependentSet.countTrue (fun j => ρ (inst.numItems * inst.numBins + j))
         inst.numBins)) := by
@@ -661,7 +661,7 @@ theorem binVal_y {n m k' : Nat} (assign : Nat → Nat) (j : Nat) :
 
 theorem binVal_sat (inst : Instance) (k' : Nat) (assign : Nat → Nat)
     (hpack : isValidPacking (inst.withBins k') assign) (hk : k' < inst.numBins) :
-    VeriPB.Reflect.FormulaSat (encodeOpt inst)
+    PBCatcher.Reflect.FormulaSat (encodeOpt inst)
       (binVal inst.numItems inst.numBins k' assign) := by
   obtain ⟨hbin, hload⟩ := hpack
   have hbin : ∀ i, i < inst.numItems → assign i < k' := hbin
@@ -711,15 +711,15 @@ minimum number of bins `k` (positive sizes). The lower bound covers only
 packings into fewer than `m` bins; the solution of the upper bound shows
 `k ≤ m`, which covers the rest. -/
 theorem minBins_of_bounds (inst : Instance) (k : Nat) (hpos : sizesPositive inst = true)
-    (h : VeriPB.Reflect.formulaBounds (encodeOpt inst) (binObjective inst) 0
+    (h : PBCatcher.Reflect.formulaBounds (encodeOpt inst) (binObjective inst) 0
       (some (k : Int)) (some (k : Int))) :
     minBins inst k := by
   have hpos := sizesPositive_spec inst hpos
   obtain ⟨hlb, hub⟩ := h
   obtain ⟨ρ, hρ, hval⟩ := hub
-  have hv : VeriPB.Reflect.opbVal (binObjective inst) 0 ρ ≤ (k : Int) := hval
+  have hv : PBCatcher.Reflect.opbVal (binObjective inst) 0 ρ ≤ (k : Int) := hval
   rw [binObjective_opbVal] at hv
-  have hv2 : (k : Int) ≤ VeriPB.Reflect.opbVal (binObjective inst) 0 ρ := hlb ρ hρ
+  have hv2 : (k : Int) ≤ PBCatcher.Reflect.opbVal (binObjective inst) 0 ρ := hlb ρ hρ
   rw [binObjective_opbVal] at hv2
   have hle := OptCount.countTrue_le
     (fun j => ρ (inst.numItems * inst.numBins + j)) inst.numBins
@@ -734,7 +734,7 @@ theorem minBins_of_bounds (inst : Instance) (k : Nat) (hpos : sizesPositive inst
   · intro k' ⟨assign, hpack⟩
     rcases Nat.lt_or_ge k' inst.numBins with hk | hk
     · have hs := binVal_sat inst k' assign hpack hk
-      have hl : (k : Int) ≤ VeriPB.Reflect.opbVal (binObjective inst) 0
+      have hl : (k : Int) ≤ PBCatcher.Reflect.opbVal (binObjective inst) 0
           (binVal inst.numItems inst.numBins k' assign) := hlb _ hs
       rw [binObjective_opbVal] at hl
       have hcount : IndependentSet.countTrue
@@ -770,8 +770,8 @@ elab "binpack_opt_reflect " nm:ident ppSpace instTerm:term:max ppSpace kTerm:num
     let hposVal ← whnfD (mkApp (mkConst ``sizesPositive) instExpr)
     unless hposVal.isConstOf ``Bool.true do
       throwError "binpack_opt_reflect: every item size must be positive"
-    let claim := VeriPB.Reflect.Claim.bounds (some (k : Int)) (some (k : Int))
-    let boundsProof ← VeriPB.Reflect.mkClaimProof `binpack_opt_reflect
+    let claim := PBCatcher.Reflect.Claim.bounds (some (k : Int)) (some (k : Int))
+    let boundsProof ← PBCatcher.Reflect.mkClaimProof `binpack_opt_reflect
       constrsExpr numVarsExpr objExpr offsetExpr proofStr claim
       (ref? := some (← getRef))
     let hposType := mkApp3 (mkConst ``Eq [.succ .zero]) (mkConst ``Bool)
