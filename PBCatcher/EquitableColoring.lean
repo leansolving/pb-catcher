@@ -133,11 +133,13 @@ def isEquitableColoring (g : Graph) (k : Nat)
 def hasEquitableColoring (g : Graph) (k : Nat) : Prop :=
   ∃ f : Nat → Nat, isEquitableColoring g k f
 
-/-- k is the equitable chromatic number of g. -/
+/-- k is the equitable chromatic number of g: g has an
+    equitable k-coloring and no equitable k'-coloring for
+    any k' < k. -/
 def equitableChromaticNumber (g : Graph) (k : Nat) :
     Prop :=
   hasEquitableColoring g k ∧
-  (k = 0 ∨ ¬hasEquitableColoring g (k - 1))
+  ∀ k', k' < k → ¬hasEquitableColoring g k'
 
 -- Encoding soundness
 
@@ -821,9 +823,31 @@ theorem k331_eq5_exists :
   witness_eq_coloring k331 5 k331_coloring5
     (by native_decide)
 
+-- Edge endpoints are vertices (needed by the exhaustive search).
+private theorem k331_edges_valid :
+    ∀ e ∈ k331.edges,
+      e.1 < k331.numVerts ∧ e.2 < k331.numVerts := by
+  decide
+
+/-- No equitable k-coloring for k < 5: k = 4 from the kernel
+    proof above, k ≤ 3 by exhaustive search (at most 3^7 colorings;
+    kernel `decide` up to k = 2, `native_decide` for k = 3). -/
+theorem k331_no_eq_lt5 :
+    ∀ k, k < 5 → ¬hasEquitableColoring k331 k
+  | 0, _ => no_eq_coloring_of_exhaustive k331 0
+      k331_edges_valid (by decide)
+  | 1, _ => no_eq_coloring_of_exhaustive k331 1
+      k331_edges_valid (by decide)
+  | 2, _ => no_eq_coloring_of_exhaustive k331 2
+      k331_edges_valid (by decide)
+  | 3, _ => no_eq_coloring_of_exhaustive k331 3
+      k331_edges_valid (by native_decide)
+  | 4, _ => k331_no_eq4
+  | _ + 5, _ => by omega
+
 /-- The equitable chromatic number of K_{3,3,1} is 5. -/
 theorem k331_eq_chromatic :
     equitableChromaticNumber k331 5 :=
-  ⟨k331_eq5_exists, Or.inr k331_no_eq4⟩
+  ⟨k331_eq5_exists, k331_no_eq_lt5⟩
 
 end EqColoringShowcase
